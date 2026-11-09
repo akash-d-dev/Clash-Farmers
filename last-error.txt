@@ -1,8 +1,0 @@
-Exception calling "Run" with "0" argument(s): "TEST FAILED: random point stays on its segment"
-At C:\Users\Amd\Desktop\dev\clash-pekkas\Start.ps1:8 char:22
-+     if ($SelfTest) { [ClashPekkas.Tests]::Run(); exit }
-+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (:) [], MethodInvocationException
-    + FullyQualifiedErrorId : Exception
- 
-

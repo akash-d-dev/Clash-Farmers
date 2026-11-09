@@ -2,10 +2,29 @@
 
 Windows app for BlueStacks or Google Play Games. Uses .NET Framework, Windows PowerShell 5.1 and Windows English OCR. No extra packages are required.
 
+## Project layout
+
+```text
+Clash Farmer/
+  Start.cmd              Open the app (PowerShell fallback if not built)
+  Start.ps1              PowerShell entry point, including -SelfTest
+  Build.ps1              Build entry point
+  src/                   C# application and executable host
+  scripts/               Build, startup, OCR, and shared path helpers
+  assets/                Runtime card references and placement example
+  config/                Shareable settings.example.json
+  tests/                 Offline checks and fixtures/
+  tools/                 Manual inspection and explicitly enabled live checks
+  bin/                   Generated executables, ignored by Git
+  data/                  Local settings, logs, diagnostics, captures, and previews
+```
+
+On first launch, `config/settings.example.json` is copied to `data/settings.json`. Existing local settings are preserved. Build outputs and the entire `data/` directory stay out of Git; they are generated or personal run data. Screenshots required by offline checks live in `tests/fixtures/`, and checks write only to `data/test-results/` or an isolated temporary directory. Scripts resolve paths relative to the project, so the folder can be moved and can contain spaces.
+
 ## Start
 
 1. Open Clash of Clans on the home village with menus closed and its normal centered camera.
-2. Open Start.cmd, select the platform, and set the controls below.
+2. Open Start.cmd, select the platform, and set the controls below. A fresh clone can run directly through Windows PowerShell; optionally run Build.ps1 first to create the executable.
 3. Click Start. A three-second countdown lets the runner bring the game forward.
 
 | Control | Range / behavior |
@@ -49,26 +68,24 @@ At the sampled deadline, the runner stops pending spell actions, recognizes eith
 
 Show troop positions draws the two L formations on a screenshot without sending game clicks. Cyan is the left L and magenta the right L. It is an approximate placement preview, not boundary detection. Use it with an opponent visible; the default camera/zoom and a 16:9 game area are required. Custom zooms, unusually cropped layouts, and scenery may require endpoint adjustment. The runner makes click attempts and cannot guarantee successful deployment of each troop or a triple.
 
-Activity is saved to run.log. Failed button and loot crops are saved under diagnostics. google-viewport.txt records Google's latest detected game bounds. Optional settings include Normal/Reverse endpoint arrays, platform/control overrides, spell settings, and deployment delay bounds. Advanced custom geometry is preserved when it differs from the known old presets.
+Activity is saved to `data/run.log`. Failed button and loot crops are saved under `data/diagnostics/`. `data/google-viewport.txt` records Google's latest detected game bounds. Optional settings in `data/settings.json` include Normal/Reverse endpoint arrays, platform/control overrides, spell settings, and deployment delay bounds. Advanced custom geometry is preserved when it differs from the known old presets. Previous local settings backups, previews, and captures are retained under `data/backups/`, `data/previews/`, and `data/captures/`.
 
 ## Build and verification
 
-Start.cmd opens ClashFarmer.exe. ClashPekkas.exe remains available for existing shortcuts. Rebuild while the runner is closed:
+Start.cmd opens `bin/ClashFarmer.exe`, falling back to `scripts/Start.ps1` when no executable exists. The build also generates `bin/ClashPekkas.exe` for filename compatibility. Rebuild while the runner is closed:
 
 ```powershell
 powershell.exe -NoProfile -File .\Build.ps1
 ```
 
-Automated checks send no live game input:
+Run all offline checks (Windows English OCR must be available):
 
 ```powershell
-powershell.exe -NoProfile -File .\Start.ps1 -SelfTest
-powershell.exe -NoProfile -STA -File .\Test-Recognition.ps1
-powershell.exe -NoProfile -STA -File .\Test-Navigation.ps1
-powershell.exe -NoProfile -STA -File .\Test-Loot.ps1
-powershell.exe -NoProfile -STA -File .\Test-GoogleLoot.ps1
-powershell.exe -NoProfile -STA -File .\Test-Configurable.ps1
-powershell.exe -NoProfile -STA -File .\Test-Adb.ps1
+powershell.exe -NoProfile -File .\tests\Test-All.ps1
 ```
 
-Coverage includes exact variable troop clicks, balanced spacing, duration bounds and spell cancellation, natural completion, both exit confirmations, three resource thresholds, unreadable-loot fallback, Stop, settings persistence, first-card recognition, platform isolation, and the 30-battle cap. Screenshot fixtures include the supplied Surrender button and End Battle/Okay dialog. outer-strip-preview.png shows the new geometry on the supplied edge-filled base. UI rendering is saved in app-preview.png.
+Individual checks can be run from `tests/`, or use `Start.ps1 -SelfTest` for the fast logic suite. They send no live game input. Coverage includes exact variable troop clicks, balanced spacing, duration bounds and spell cancellation, natural completion, both exit confirmations, three resource thresholds, unreadable-loot fallback, Stop, settings persistence, first-card recognition, platform isolation, and the 30-battle cap. Screenshot fixtures include the supplied Surrender button and End Battle/Okay dialog. Generated geometry and UI images are saved to `data/test-results/`.
+
+The scripts in `tools/` are manual utilities. `Run-OneBattle.ps1 -RunOneBattle` performs a live ADB attack and `Verify-Startup.ps1 -Navigate` performs live menu navigation; neither is included in Test-All.ps1.
+
+To share the app, copy `Start.cmd`, `scripts/`, `src/`, `assets/`, `config/`, and optionally the built `bin/` directory together, keeping this layout. The recipient gets fresh defaults unless you deliberately include `data/settings.json`. After moving or renaming the project, update any desktop shortcuts to the new `Start.cmd` path.

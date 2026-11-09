@@ -1,0 +1,8 @@
+# Generated executables and local runtime data (settings, logs, screenshots).
+/bin/
+/data/
+*.pdb
+*.tmp
+.vs/
+.idea/
+.vscode/
