@@ -1,0 +1,296 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+namespace ClashPekkas {
+    public sealed class FakeGame : IGame {
+        public string Screen="home"; public int Deployments,Selections,SpellSelections,SpellCasts,HomeClicks,FindClicks,ArmyClicks,ReturnClicks;
+        public bool Occluded, Missing, WrongTroop,MissingLaunch,WrongSpell,SpellsRequired=true;
+        public DateTime Now;public readonly List<DateTime> SpellTimes=new List<DateTime>();public readonly List<Vec> SpellPoints=new List<Vec>();
+        public int NextClicks,LootReads,ReturnReadsDuringOpening,ExpiredSearches;
+        public bool UnreadableFirst,ScoutWithoutNext;
+        public bool LongBattle,NoStar,DropArmyOnce,DropFindOnce,UnknownDialog,StrictNavigation;
+        public int TroopsPerBattle=25;
+        public int EndClicks,ConfirmClicks,PanelCloses;public DateTime TroopsDone,EndedAt;
+        public readonly Dictionary<string,int> Reads=new Dictionary<string,int>();
+        public List<LootReading> Opponents=new List<LootReading>{new LootReading(1000000,1000000)};
+        public readonly Queue<LootReading> TransientLoot=new Queue<LootReading>();
+        public void Guard() { if(Occluded) throw new Exception("focus lost"); }
+        public Vec Find(string button) {
+            if(!Reads.ContainsKey(button)) Reads[button]=0;Reads[button]++;
+            if(Missing) return null;
+            if(button=="attack" && Screen=="home") return new Vec(.1,.9);
+            if(button=="find" && Screen=="find") return new Vec(.18,.73);
+            if(button=="launch" && Screen=="army" && !MissingLaunch) return new Vec(.87,.9);
+            if(button=="next" && Screen=="scout" && !ScoutWithoutNext) return new Vec(.9,.7);
+            if(button=="end" && Screen=="scout" && ScoutWithoutNext) return new Vec(.1,.78);
+            if(button=="retreat" && (Screen=="fighting" || Screen=="spells" || Screen=="battle")) return new Vec(.1,.78);
+            if(button=="surrenderTitle" && Screen=="confirm" && !UnknownDialog) return new Vec(.5,.3);
+            if(button=="confirmSurrender" && Screen=="confirm") return new Vec(.6,.63);
+            if(button=="return") { if(Screen=="spells" && SpellCasts<6) ReturnReadsDuringOpening++;if(Screen=="result") return new Vec(.5,.8); }
+            return null;
+        }
+        public Vec FirstTroopCard() { return WrongTroop?null:new Vec(.185,.93); }
+        public bool SpellVisible() { return !WrongSpell; }
+        public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { LootReads++;if(TransientLoot.Count>0) return TransientLoot.Dequeue();return UnreadableFirst && NextClicks==0 ? null : Opponents[Math.Min(NextClicks,Opponents.Count-1)]; }
+        public void Click(Vec p) {
+            Guard();
+            if(Screen=="home") { if(StrictNavigation && (p.X>.2 || p.Y<.82)) throw new Exception("Wrong home coordinate");HomeClicks++;Screen="find"; }
+            else if((Screen=="army" && p.X>.94 && p.Y<.15) || (Screen=="find" && p.X>.65 && p.X<.75 && p.Y>.8 && p.Y<.85)) { PanelCloses++;Screen="home"; }
+            else if(Screen=="find") { if(DropFindOnce) { DropFindOnce=false;return; } if(p.X>.78 && p.Y>.82) return; if(StrictNavigation && (p.X>.3 || p.Y<.65 || p.Y>.82)) throw new Exception("Wrong match coordinate");FindClicks++;Screen="army"; }
+            else if(Screen=="army") { if(DropArmyOnce) { DropArmyOnce=false;return; } if(StrictNavigation && (p.X<.78 || p.Y<.82)) throw new Exception("Wrong army coordinate");ArmyClicks++;Screen="scout"; }
+            else if(Screen=="scout") { if(ScoutWithoutNext && p.X<.2 && p.Y<.85) { ExpiredSearches++;ScoutWithoutNext=false;Screen="home"; } else if(p.X>.8 && p.Y<.85) { NextClicks++; } else { Selections++;Screen="deploy"; } }
+            else if(Screen=="deploy") { Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now;Screen=SpellsRequired && !WrongSpell?"battle":LongBattle?"fighting":"result"; } }
+            else if((Screen=="battle" || Screen=="spells") && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
+            else if(Screen=="battle") { if(p.Y<.85) throw new Exception("Expected spell card selection");SpellSelections++;Screen="spells"; }
+            else if(Screen=="spells") { if(p.Y>=.80) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%11==0) Screen=LongBattle?"fighting":"result"; }
+            else if(Screen=="fighting") { EndClicks++;EndedAt=Now;Screen="confirm"; }
+            else if(Screen=="confirm") { ConfirmClicks++;Screen="result"; }
+            else if(Screen=="result") { ReturnClicks++;Screen="home"; }
+            else throw new Exception("Unexpected click");
+        }
+    }
+    public static class Tests {
+        static void Assert(bool ok,string name) { if(!ok) throw new Exception("TEST FAILED: "+name); }
+        public static string Run() {
+            Settings settings=new Settings{FastNavigation=false};var logs=new List<string>();DateTime now=new DateTime(2026,1,1);
+            var game=new FakeGame();var runner=new Runner(game,settings,10,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(!runner.Active && runner.Completed==10,"ten battles finish");
+            foreach(int troopTotal in new[]{1,2,25,500}) {
+                var variableGame=new FakeGame{TroopsPerBattle=troopTotal};var variableSettings=new Settings{Troops=troopTotal};
+                var variableRunner=new Runner(variableGame,variableSettings,1,false,logs.Add,new Random(troopTotal));variableRunner.Start(now);
+                for(int t=0;t<10000 && variableRunner.Active;t++){variableGame.Now=now.AddMilliseconds(t*100);variableRunner.Tick(variableGame.Now);}
+                Assert(variableRunner.Completed==1 && variableGame.Deployments==troopTotal && variableGame.Selections==1,"configured troop count uses only one card and exact click attempts");
+                foreach(bool mirror in new[]{false,true}) for(int seed=0;seed<25;seed++) {
+                    var positions=Plan.Make(variableSettings,mirror,new Random(seed));int upper=positions.Count(p=>p.Y<.5);
+                    Assert(positions.Count==troopTotal && Math.Abs(upper-(troopTotal-upper))<=1,"even split with at most one extra troop");
+                    for(int arm=0;arm<2;arm++) {
+                        var side=positions.Where(p=>(p.Y<.5?0:1)==arm).ToList();var endpoints=(mirror?variableSettings.Reverse:variableSettings.Normal);Vec a=endpoints[arm*2],b=endpoints[arm*2+1];
+                        double length=Plan.PixelDistance(a,b);
+                        for(int i=1;i<side.Count;i++) Assert(Plan.PixelDistance(side[i-1],side[i])>=length*.59/side.Count,"jitter preserves a minimum gap between troop placements");
+                    }
+                }
+            }
+            foreach(int duration in new[]{3,60,180}) {
+                var timedGame=new FakeGame{LongBattle=true};var timedSettings=new Settings{AttackDurationSeconds=duration};
+                var timedRunner=new Runner(timedGame,timedSettings,1,false,logs.Add,new Random(2));timedRunner.Start(now);
+                for(int t=0;t<5000 && timedRunner.Active;t++){timedGame.Now=now.AddMilliseconds(t*100);timedRunner.Tick(timedGame.Now);}
+                double elapsed=(timedGame.EndedAt-timedGame.TroopsDone).TotalSeconds;
+                Assert(timedRunner.Completed==1 && timedGame.EndClicks==1 && timedGame.ConfirmClicks==1,"configured duration ends the battle through its confirmation");
+                Assert(elapsed>=Math.Max(3,duration-5) && elapsed<=Math.Min(180,duration+5)+1,"duration jitter is bounded and does not wait for the final spell");
+                if(duration==3)Assert(timedGame.SpellCasts<11,"short timer cancels pending late spells");
+            }
+            var noLootGame=new FakeGame{UnreadableFirst=true};var noLootSettings=new Settings{MinGold=0,MinElixir=0,MinDarkElixir=0};
+            var noLootRunner=new Runner(noLootGame,noLootSettings,1,false,logs.Add,new Random(2));noLootRunner.Start(now);
+            for(int t=0;t<5000 && noLootRunner.Active;t++)noLootRunner.Tick(now.AddMilliseconds(t*100));
+            Assert(noLootRunner.Completed==1 && noLootGame.LootReads==0 && noLootGame.NextClicks==0,"zero thresholds bypass loot OCR and accept the first base");
+            var darkGame=new FakeGame{Opponents=new List<LootReading>{new LootReading(900000,900000,999),new LootReading(900000,900000,1000)}};
+            var darkRunner=new Runner(darkGame,new Settings{MinDarkElixir=1000},1,false,logs.Add,new Random(2));darkRunner.Start(now);
+            for(int t=0;t<5000 && darkRunner.Active;t++)darkRunner.Tick(now.AddMilliseconds(t*100));
+            Assert(darkRunner.Completed==1 && darkGame.NextClicks==1,"dark elixir threshold is enforced alongside gold and elixir");
+            var migrated=Settings.FromJson("{\"Troops\":10,\"MinBattleSeconds\":60,\"MaxBattleSeconds\":80}");
+            Assert(migrated.Troops==10 && migrated.AttackDurationSeconds==70,"legacy duration settings migrate to their midpoint");
+            Assert(game.Deployments==250 && game.Selections==10,"exactly 25 deployment clicks per battle");
+            Assert(game.SpellSelections==10 && game.SpellCasts==110,"exactly 11 spell casts per battle");
+            Assert(game.HomeClicks==10 && game.FindClicks==10 && game.ArmyClicks==10 && game.ReturnClicks==10,"home, matchmaking, army confirmation, and return once per battle");
+            for(int t=0;t<100;t++) runner.Tick(now.AddHours(1));
+            Assert(game.Deployments==250 && game.SpellCasts==110 && game.HomeClicks==10,"hard stop prevents eleventh battle or further spell casts");
+            game=new FakeGame();runner=new Runner(game,new Settings{Battles=30,Platform="GooglePlayGames"},30,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<20000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(!runner.Active && runner.Completed==30 && game.Deployments==750 && game.SpellCasts==330 && game.HomeClicks==30,"thirty Google battles finish with exactly 750 troops and 330 spells");
+            runner.Tick(now.AddHours(10));Assert(game.HomeClicks==30 && game.Deployments==750,"thirty-battle run cannot start battle thirty-one");
+            bool limitRejected=false;try {new Runner(new FakeGame(),new Settings(),31,false,logs.Add,new Random());}catch{limitRejected=true;}
+            Assert(limitRejected,"more than thirty battles rejected");
+            game=new FakeGame{StrictNavigation=true};runner=new Runner(game,new Settings(),10,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<10000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            Assert(runner.Completed==10 && game.Deployments==250 && game.SpellCasts==110,"default fast navigation preserves ten-battle cap and deployment counts");
+            Assert(!game.Reads.ContainsKey("find") && !game.Reads.ContainsKey("launch"),"successful fast route does not OCR intermediate buttons");
+            game=new FakeGame{StrictNavigation=true,DropArmyOnce=true};runner=new Runner(game,new Settings(),2,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<10000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            Assert(runner.Completed==2 && game.Deployments==50 && game.PanelCloses==1 && game.ArmyClicks==2,"failed fast click returns home and scanned retry does not count an extra battle");
+            Assert(logs.Any(s=>s.Contains("scanned retry")) && logs.Any(s=>s.Contains("Fast navigation verified")),"fallback recovers then later battle uses fast navigation again");
+            game=new FakeGame{StrictNavigation=true,DropFindOnce=true};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<10000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            Assert(runner.Completed==1 && game.PanelCloses==1 && game.Deployments==25,"missed Find a Match dismisses the recognized left sheet then retries from home");
+            foreach(bool noStar in new[]{false,true}) {
+                game=new FakeGame{LongBattle=true,NoStar=noStar};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
+                for(int t=0;t<3000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+                Assert(runner.Completed==1 && game.EndClicks==1 && game.ConfirmClicks==1,"timed exit handles both End Battle and Surrender confirmations");
+                double elapsed=(game.EndedAt-game.TroopsDone).TotalSeconds;
+                Assert(elapsed>=80 && elapsed<=103,"cutoff is measured from full troop deployment with bounded polling overhead");
+            }
+            game=new FakeGame{LongBattle=true,NoStar=true,UnknownDialog=true};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<3000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            Assert(!runner.Active && runner.Completed==0 && game.ConfirmClicks==0,"unknown confirmation is never accepted");
+            game=new FakeGame{LongBattle=true,SpellsRequired=false};runner=new Runner(game,new Settings{UseSpells=false},1,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<3000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            Assert(runner.Completed==1 && game.EndClicks==1,"cutoff also applies without spells");
+            game=new FakeGame{LongBattle=true};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
+            for(int t=0;t<2000 && game.SpellCasts<11;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
+            runner.Stop("Stop before cutoff");runner.Tick(now.AddMinutes(5));
+            Assert(game.EndClicks==0 && game.ReturnClicks==0,"stop cancels the future battle cutoff");
+            game=new FakeGame{Screen="result"};runner=new Runner(game,settings,5,false,logs.Add,new Random(2));runner.ResumeExistingBattle(now,0);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==5 && game.Deployments==100 && game.ReturnClicks==5 && game.HomeClicks==4,"recovery completes existing battle then exactly four remaining battles");
+            game=new FakeGame{Screen="scout",ScoutWithoutNext=true};runner=new Runner(game,settings,5,false,logs.Add,new Random(2));runner.ResumeExistingBattle(now,1,true);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==5 && game.Deployments==100 && game.ReturnClicks==4 && game.ExpiredSearches==1,"unfinished search recovery keeps previous count and completes four actual attacks");
+            game=new FakeGame{ScoutWithoutNext=true};runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && game.ExpiredSearches==1 && game.Deployments==25,"expired scout is left without counting it as a battle");
+            game=new FakeGame();runner=new Runner(game,settings,1,false,logs.Add,new Random(32));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*50);runner.Tick(game.Now); }
+            Assert(game.SpellTimes.Count==11 && runner.Completed==1,"complete timed spell schedule");
+            Assert((game.SpellTimes[5]-game.SpellTimes[0]).TotalMilliseconds<=600 && game.ReturnReadsDuringOpening==0,"opening six are a fast burst without OCR between casts");
+            for(int i=6;i<11;i++) {
+                double interval=(game.SpellTimes[i]-game.SpellTimes[i-1]).TotalMilliseconds;
+                Assert(i==6 ? interval>=5000 && interval<=10050 : interval>=2000 && interval<=5050,"first delayed spell waits 5-10 seconds, remaining four wait 2-5 seconds");
+            }
+            game=new FakeGame();runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<5000 && game.SpellCasts<6;t++) runner.Tick(now.AddMilliseconds(t*50));
+            Assert(game.SpellCasts==6,"six opening casts happen before delayed casts");
+            runner.Stop("Stopped during spell wait.");
+            for(int t=0;t<100;t++) runner.Tick(now.AddMinutes(4).AddMilliseconds(t*300));
+            Assert(game.SpellCasts==6 && game.ReturnClicks==0,"stop cancels delayed spells without navigation");
+            game=new FakeGame();runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            int earlyTick=0;
+            while(runner.Active && game.SpellCasts<6 && earlyTick<5000) runner.Tick(now.AddMilliseconds(earlyTick++*50));
+            game.Screen="result";
+            for(int t=earlyTick;t<earlyTick+400 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*50));
+            Assert(runner.Completed==1 && game.SpellCasts==6,"early result skips unused spells and returns home");
+            game=new FakeGame{WrongSpell=true};runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && game.SpellSelections==0 && game.SpellCasts==0,"unrecognized spell card is skipped");
+            game=new FakeGame{SpellsRequired=false};runner=new Runner(game,new Settings{UseSpells=false},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && game.SpellCasts==0,"spells can be disabled without changing the battle loop");
+            game=new FakeGame{Opponents=new List<LootReading>{new LootReading(499999,700000),new LootReading(700000,499999),new LootReading(500000,500000)}};
+            runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && runner.SkippedBases==2 && game.NextClicks==2 && game.Selections==1 && game.HomeClicks==1,"both loot thresholds required, exact boundary accepted, skips do not count as battles");
+            game=new FakeGame{UnreadableFirst=true};runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && game.NextClicks==0 && game.LootReads==3 && game.Deployments==25,"unreadable loot is retried three times then current base is attacked without Next");
+            game=new FakeGame{UnreadableFirst=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
+            Assert(!runner.Active && runner.Completed==1 && game.LootReads==3 && game.NextClicks==0 && game.Deployments==25,"Google unreadable loot attacks the current base after three attempts and completes the battle");
+            game=new FakeGame{UnreadableFirst=true,WrongTroop=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
+            Assert(game.LootReads==3 && game.Deployments==0 && game.NextClicks==0 && runner.Message.Contains("troop card"),"unreadable-loot fallback still verifies the troop card before any deployment");
+            game=new FakeGame{UnreadableFirst=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && game.LootReads<2;t++) runner.Tick(now.AddMilliseconds(t*100));
+            runner.Stop("Stopped during loot retries");runner.Tick(now.AddHours(1));
+            Assert(game.LootReads==2 && game.Deployments==0 && game.NextClicks==0,"Stop cancels the attack fallback while loot retries are pending");
+            game=new FakeGame{Opponents=new List<LootReading>{new LootReading(1966173,2046173)}};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
+            Assert(runner.Completed==1 && game.NextClicks==0 && game.Deployments==25,"qualifying Google base is accepted without a Next click");
+            game=new FakeGame();game.TransientLoot.Enqueue(new LootReading(700000,700000));game.TransientLoot.Enqueue(new LootReading(400000,700000));game.TransientLoot.Enqueue(new LootReading(400000,700000));
+            runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(runner.Completed==1 && game.NextClicks==1,"single transient high loot reading cannot trigger deployment");
+            game=new FakeGame{Opponents=new List<LootReading>{new LootReading(1,1)}};runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<200;t++) runner.Tick(now.AddMilliseconds(t*300));
+            int skippedBeforeStop=game.NextClicks;runner.Stop("Stopped searching.");runner.Tick(now.AddHours(1));
+            Assert(skippedBeforeStop>0 && game.NextClicks==skippedBeforeStop && game.Deployments==0,"indefinite loot search remains cancellable");
+            game=new FakeGame{MissingLaunch=true};runner=new Runner(game,settings,1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<500 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(!runner.Active && game.FindClicks==1 && game.ArmyClicks==0 && game.Selections==0 && game.Deployments==0,"missing army Attack times out without selecting or deploying troops");
+            game=new FakeGame{Screen="scout"};runner=new Runner(game,settings,1,true,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<500 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
+            Assert(!runner.Active && game.Deployments==25 && game.HomeClicks==0 && game.ReturnClicks==0,"deployment only never navigates");
+            game=new FakeGame{Missing=true};runner=new Runner(game,settings,10,false,logs.Add,new Random(2));runner.Start(now);
+            runner.Tick(now.AddSeconds(46));Assert(!runner.Active && game.HomeClicks==0,"missing button times out without clicks");
+            game=new FakeGame{Occluded=true};runner=new Runner(game,settings,10,false,logs.Add,new Random(2));runner.Start(now);
+            runner.Tick(now.AddSeconds(1));Assert(!runner.Active && game.HomeClicks==0,"focus failure stops before clicking");
+            game=new FakeGame{Screen="scout",WrongTroop=true};runner=new Runner(game,settings,1,true,logs.Add,new Random(2));runner.Start(now);
+            runner.Tick(now.AddSeconds(1));runner.Tick(now.AddSeconds(2));runner.Tick(now.AddSeconds(3));Assert(!runner.Active && game.Selections==0,"wrong troop stops");
+            game=new FakeGame();runner=new Runner(game,settings,10,false,logs.Add,new Random(2));runner.Start(now);
+            runner.Tick(now.AddSeconds(1));Assert(game.HomeClicks==0,"button requires two observations");
+            game.Missing=true;runner.Tick(now.AddSeconds(2));game.Missing=false;runner.Tick(now.AddSeconds(3));Assert(game.HomeClicks==0,"missing frame resets stability");
+            runner.Tick(now.AddSeconds(4));Assert(game.HomeClicks==1,"stable button clicked once");
+            game=new FakeGame{Screen="scout"};runner=new Runner(game,settings,1,true,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<500 && game.Deployments<4;t++) runner.Tick(now.AddMilliseconds(t*300));
+            int beforeStop=game.Deployments;runner.Stop("Stopped by user.");
+            for(int t=0;t<100;t++) runner.Tick(now.AddMinutes(2).AddMilliseconds(t*300));
+            Assert(beforeStop==4 && game.Deployments==beforeStop && runner.Message=="Stopped by user.","manual stop prevents subsequent placements and preserves the reason");
+            Assert(PlayerWindows.IsMain("BlueStacks App Player",2560,1392,false),"main BlueStacks window selected");
+            Assert(!PlayerWindows.IsMain("BlueStacks App Player",240,130,false),"small helper window ignored");
+            Assert(!PlayerWindows.IsMain("BlueStacks App Player",1200,800,true),"owned popup ignored");
+            Assert(!PlayerWindows.IsMain("BlueStacks Settings",1200,800,false),"settings window ignored");
+            var googleClient=new Rectangle(42,0,2471,1388);var googlePane=new Rectangle(106,36,2411,1356);
+            Assert(Native.IsGoogleGameArea(googlePane,googleClient),"actual Google maximized pane tolerates its four-pixel frame overlap");
+            Rectangle googleView=Native.FitGameArea(Rectangle.Intersect(googlePane,googleClient));
+            Assert(googleClient.Contains(googleView) && googleView.X>=106 && googleView.Y>=36 && Math.Abs((double)googleView.Width/googleView.Height-16.0/9)<.002,"clipped Google game area excludes title, sidebar and desktop gaps");
+            Assert(!Native.IsGoogleGameArea(new Rectangle(106,36,2425,1356),googleClient) && !Native.IsGoogleGameArea(googleClient,googleClient),"large offscreen overflow and whole-window candidates are rejected");
+            Assert(!AdbClient.Enabled(new Settings{Platform="GooglePlayGames"}),"Google selection never uses the BlueStacks ADB connection");
+            var oldGeometry=new Settings{GeometryVersion=2,Normal=Settings.PreviousOuterLines(false),Reverse=Settings.PreviousOuterLines(true),AttackDurationSeconds=30};
+            var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
+            var previousConfig=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(oldGeometry));
+            previousConfig.Remove("NormalSpellGuide");previousConfig.Remove("ReverseSpellGuide");
+            var adjusted=Settings.FromJson(serializer.Serialize(previousConfig));
+            Assert(adjusted.GeometryVersion==3 && adjusted.AttackDurationSeconds==30,"geometry migration preserves the selected duration");
+            for(int i=2;i<4;i++)Assert(adjusted.Normal[i].X==oldGeometry.Normal[i].X && adjusted.Normal[i].Y==oldGeometry.Normal[i].Y,"working lower-left green line is unchanged");
+            for(int i=0;i<2;i++) {
+                Assert(adjusted.Normal[i].X<oldGeometry.Normal[i].X && adjusted.Normal[i].Y<oldGeometry.Normal[i].Y,"upper-left moves outward and upward");
+                Assert(adjusted.Reverse[i].X>oldGeometry.Reverse[i].X && adjusted.Reverse[i].Y<oldGeometry.Reverse[i].Y,"upper-right moves outward and upward");
+            }
+            foreach(Vec p in Plan.Make(adjusted,true,new Random(11)).Where(p=>p.Y>.5))Assert(p.X+.78*p.Y>1.25 && p.X+.78*p.Y<1.27 && p.Y<=.83,"lower-right points stay in the marked grass corridor and above the troop bar");
+            foreach(bool orientation in new[]{false,true}) {
+                var before=Plan.OpeningSpells(oldGeometry,orientation,new Random(6));var after=Plan.OpeningSpells(adjusted,orientation,new Random(6));
+                Assert(before.Zip(after,(a,b)=>a.X==b.X && a.Y==b.Y).All(v=>v),"deployment correction preserves opening spell locations");
+            }
+            var rng=new Random(6);
+            for(int k=0;k<1000;k++) foreach(bool reverse in new[]{false,true}) {
+                List<Vec> points=Plan.Make(settings,reverse,rng);Vec[] lines=reverse?settings.Reverse:settings.Normal;
+                Assert(points.Count==25,"geometry count");
+                for(int i=0;i<points.Count;i++) {
+                    int arm=points[i].Y<.5?0:1;Vec a=lines[arm*2],b=lines[arm*2+1],p=points[i];
+                    double cross=(p.X-a.X)*(b.Y-a.Y)-(p.Y-a.Y)*(b.X-a.X);
+                    Assert(Math.Abs(cross)<1e-10 && p.X>=Math.Min(a.X,b.X) && p.X<=Math.Max(a.X,b.X) && p.Y>=Math.Min(a.Y,b.Y) && p.Y<=Math.Max(a.Y,b.Y),"random point stays on its segment");
+                }
+                List<Vec> opening=Plan.OpeningSpells(settings,reverse,rng);
+                Assert(opening.Count==6,"three opening spells per arm");
+                Assert(opening.Take(3).Average(p=>p.Y)<opening.Skip(3).Average(p=>p.Y),"first three and second three cover separate entry flanks");
+                for(int arm=0;arm<2;arm++) {
+                    Vec[] guides=reverse?settings.ReverseSpellGuide:settings.NormalSpellGuide;
+                    double bx=(guides[arm*2].X+guides[arm*2+1].X)/2-.5,by=(guides[arm*2].Y+guides[arm*2+1].Y)/2-.45;
+                    double sx=opening.Skip(arm*3).Take(3).Average(p=>p.X)-.5,sy=opening.Skip(arm*3).Take(3).Average(p=>p.Y)-.45;
+                    double ratio=Math.Sqrt((sx*sx+sy*sy)/(bx*bx+by*by));
+                    Assert(ratio>.53 && ratio<.73,"opening spell paths are roughly 6-7 tiles out for a 10-tile deployment radius");
+                }
+                foreach(Vec spell in opening) Assert(spell.Y>=.14 && spell.Y<=.74 && (reverse ? spell.X>=.52 : spell.X<=.48),"opening spells stay on the chosen half and avoid HUD");
+                foreach(double seconds in new[]{0.0,15.0,40.0,90.0,180.0}) {
+                    Vec spell=Plan.LaterSpell(settings,reverse,seconds,rng);
+                    Assert(spell.Y>=.14 && spell.Y<=.74 && (reverse ? spell.X>=.52 && spell.X<=.92 : spell.X>=.08 && spell.X<=.48),"later spell target stays in the attacked half");
+                }
+            }
+            Assert(!Vision.Label("attack","End Battle") && !Vision.Label("find","Next") && !Vision.Label("return","Okay"),"unrelated buttons rejected");
+            Assert(Vision.Label("attack","Battle") && !Vision.Label("attack","Ranked Battle") && !Vision.Label("attack","Battle ends in"),"current home Battle label accepted without accepting in-battle labels");
+            Assert(Vision.Label("attack","Baffle"),"observed Google Battle OCR with both stylized t letters read as f is accepted inside the home-button region");
+            Assert(Vision.Label("attack","'Baetie") && Vision.Label("attack","BattiE") && !Vision.Label("attack","Battle ends in") && !Vision.Label("attack","Ranked Battle"),"common home-button font confusions accepted without matching battle screen labels");
+            Assert(Vision.Label("return","R TURN -") && !Vision.Label("return","Okay"),"observed Google Return OCR with missing e is accepted in the results-only button crop");
+            Assert(Vision.Label("find","FiNd a Matcx") && !Vision.Label("find","Join Tournament"),"observed Find a Match OCR error accepted without selecting ranked button");
+            Assert(Vision.Label("launch","Attack!") && !Vision.Label("launch","Boost Army") && !Vision.Label("launch","Battle"),"army confirmation recognizes only Attack");
+            Assert(AdbClient.ValidSerial("127.0.0.1:5555") && !AdbClient.ValidSerial("192.168.1.20:5555") && !AdbClient.ValidSerial("127.0.0.1:99999") && !AdbClient.ValidSerial("127.0.0.1:5555 shell"),"ADB only accepts a valid loopback endpoint");
+            Assert(AdbClient.ValidSerial("emulator-5554") && !AdbClient.ValidSerial("emulator-5554 shell") && !AdbClient.ValidSerial("emulator-99999"),"registered local emulator serial accepted without shell arguments");
+            Assert(Vision.Label("attack","Attack!") && Vision.Label("find","Find a Match") && Vision.Label("return","Return Home"),"expected button labels");
+            Rectangle roi=Vision.Region("next");
+            Assert(Vision.Locate("next",new[]{new OcrLine{Text="Next",X=30,Y=50,Width=100,Height=40}},roi)!=null,"OCR coordinates converted");
+            Assert(Vision.Locate("next",new[]{new OcrLine{Text="Next"},new OcrLine{Text="Next"}},roi)==null,"ambiguous labels rejected");
+            long number;
+            Assert(Vision.TryLootNumber("500 000",out number) && number==500000 && Vision.TryLootNumber("1,437,714",out number) && number==1437714 && Vision.TryLootNumber("5,00,000",out number) && number==500000,"loot digit grouping parsed");
+            Assert(!Vision.TryLootNumber("500K",out number) && !Vision.TryLootNumber("1 4370714",out number) && !Vision.TryLootNumber("Gold 500000",out number),"ambiguous loot strings rejected");
+            using(Bitmap a=new Bitmap(40,40)) using(Bitmap b=new Bitmap(40,40)) {
+                using(Graphics g=Graphics.FromImage(a)) g.Clear(Color.Blue);
+                using(Graphics g=Graphics.FromImage(b)) g.Clear(Color.Red);
+                Assert(Vision.Similar(a,a) && !Vision.Similar(a,b),"troop appearance comparison");
+            }
+            settings.MinDelayMs=0;bool rejected=false;try { settings.Validate(); } catch { rejected=true; }Assert(rejected,"bad configuration rejected");
+            return "PASS: both 500,000 loot thresholds, stable reads, unreadable loot retries, Next filtering and cancellation, 30 battles, 750 troops, 330 spells, fast six-cast burst without OCR, inward placement, 5-10 / 2-5 second late casts, fast navigation and scanned fallback, timed exit and guarded surrender, early results, stop behavior, and recognition checks. No live input sent.";
+        }
+    }
+}
+
+
+

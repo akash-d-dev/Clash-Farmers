@@ -1,0 +1,7 @@
+Client: {X=42,Y=0,Width=2471,Height=1388}
+Pane name= class=HwndHost id= bounds=106,36,2411,1356
+Pane name=crosvm class=CROSVM_1 id= bounds=106,36,2411,1356
+Pane name=sub class=subWin id= bounds=106,36,2411,1356
+Child class=CROSVM_1 bounds={X=106,Y=36,Width=2411,Height=1356}
+Child class=MetricsOverlayWndClass bounds={X=116,Y=46,Width=295,Height=218}
+Child class=subWin bounds={X=106,Y=36,Width=2411,Height=1356}

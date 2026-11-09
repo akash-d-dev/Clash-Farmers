@@ -1,0 +1,69 @@
+{
+  "Troops": 25,
+  "Battles": 30,
+  "MinDelayMs": 130,
+  "MaxDelayMs": 250,
+  "TopChrome": 32,
+  "RightChrome": 32,
+  "ViewAspect": 1.7777777777777777,
+  "Normal": [
+    {
+      "Y": 0.3,
+      "X": 0.16
+    },
+    {
+      "Y": 0.16,
+      "X": 0.3
+    },
+    {
+      "Y": 0.55,
+      "X": 0.11
+    },
+    {
+      "Y": 0.72,
+      "X": 0.275
+    }
+  ],
+  "Reverse": [
+    {
+      "Y": 0.11,
+      "X": 0.65
+    },
+    {
+      "Y": 0.36,
+      "X": 0.86
+    },
+    {
+      "Y": 0.53,
+      "X": 0.89
+    },
+    {
+      "Y": 0.71,
+      "X": 0.73
+    }
+  ],
+  "TroopButton": {
+    "X": 0.185,
+    "Y": 0.93
+  },
+  "MaxSpellIntervalMs": 5000,
+  "SpellButton": {
+    "Y": 0.93,
+    "X": 0.57
+  },
+  "UseSpells": true,
+  "MinSpellIntervalMs": 2000,
+  "Spells": 11,
+  "OpeningSpellInward": 0.35,
+  "MinGold": 500000,
+  "OpeningSpellDelayMs": 100,
+  "FilterLoot": true,
+  "MinElixir": 500000,
+  "MinFirstSpellWaitMs": 5000,
+  "MinBattleSeconds": 80,
+  "EndBattleEarly": true,
+  "FastNavigation": true,
+  "MaxBattleSeconds": 100,
+  "MaxFirstSpellWaitMs": 10000,
+  "Platform": "GooglePlayGames"
+}
