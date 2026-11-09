@@ -924,7 +924,7 @@ namespace ClashPekkas {
             };
             var flow=new Panel{BackColor=Color.White,Location=new Point(22,130),Size=new Size(716,139)};
             AddInput(flow,troopCount,"troopCount","Troops per attack",15,12,165,1,500,settings.Troops);
-            AddInput(flow,durationSeconds,"durationSeconds","End after troops (s)",305,12,500,3,180,settings.AttackDurationSeconds);
+            AddInput(flow,durationSeconds,"durationSeconds","End battle after (s)",305,12,500,3,180,settings.AttackDurationSeconds);
             AddInput(flow,goldMinimum,"goldMinimum","Gold min",15,55,15,0,99999999,settings.MinGold,true);
             AddInput(flow,elixirMinimum,"elixirMinimum","Elixir min",245,55,245,0,99999999,settings.MinElixir,true);
             AddInput(flow,darkMinimum,"darkMinimum","Dark elixir min",475,55,475,0,99999999,settings.MinDarkElixir,true);

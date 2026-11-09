@@ -12,7 +12,7 @@ Windows app for BlueStacks or Google Play Games. Uses .NET Framework, Windows Po
 | --- | --- |
 | Battles | 1–30 completed attacks |
 | Troops per attack | 1–500 placement click attempts, always from the first troop card |
-| End after troops (s) | 3–180 seconds after the final troop click, randomized by ±5 seconds and clamped to 3–180 |
+| End battle after (s) | 3–180 seconds after the final troop click, randomized by ±5 seconds and clamped to 3–180 |
 | Gold / Elixir / Dark elixir min | 0–99,999,999 each; zero disables that resource check |
 
 Settings save as you change them and are locked during a run. Existing gold/elixir defaults remain 500,000 each; dark elixir defaults to zero. Default troop count is 25 and default duration is 90 seconds. The old duration bounds migrate to their midpoint. Known old short deployment lines migrate to the wider outer-strip preset.
