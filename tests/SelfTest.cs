@@ -2,10 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Windows.Forms;
 namespace ClashPekkas {
     public sealed class FakeGame : IGame {
         public string Screen="home"; public int Deployments,Selections,SpellSelections,SpellCasts,HomeClicks,FindClicks,ArmyClicks,ReturnClicks;
         public bool Occluded, Missing, WrongTroop,MissingLaunch,WrongSpell,SpellsRequired=true;
+        public int TroopCardReads,SpellCardChecks;public bool RejectKey,KeySelection;
+        public readonly List<Keys> SelectionKeys=new List<Keys>();
         public DateTime Now;public readonly List<DateTime> SpellTimes=new List<DateTime>();public readonly List<Vec> SpellPoints=new List<Vec>();
         public int NextClicks,LootReads,ReturnReadsDuringOpening,ExpiredSearches;
         public bool UnreadableFirst,ScoutWithoutNext;
@@ -30,8 +33,15 @@ namespace ClashPekkas {
             if(button=="return") { if(Screen=="spells" && SpellCasts<6) ReturnReadsDuringOpening++;if(Screen=="result") return new Vec(.5,.8); }
             return null;
         }
-        public Vec FirstTroopCard() { return WrongTroop?null:new Vec(.185,.93); }
-        public bool SpellVisible() { return !WrongSpell; }
+        public Vec FirstTroopCard() { TroopCardReads++;return WrongTroop?null:new Vec(.185,.93); }
+        public bool SpellVisible() { SpellCardChecks++;return !WrongSpell; }
+        public void PressKey(Keys key) {
+            Guard();if(RejectKey) throw new Exception("selection input failed");
+            if(key==Keys.D1 && Screen=="scout") {KeySelection=true;Selections++;Screen="deploy";}
+            else if(key==Keys.A && Screen=="battle") {SpellSelections++;Screen="spells";}
+            else throw new Exception("Unexpected selection key or screen");
+            SelectionKeys.Add(key);
+        }
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { LootReads++;if(TransientLoot.Count>0) return TransientLoot.Dequeue();return UnreadableFirst && NextClicks==0 ? null : Opponents[Math.Min(NextClicks,Opponents.Count-1)]; }
         public void Click(Vec p) {
             Guard();
@@ -40,7 +50,7 @@ namespace ClashPekkas {
             else if(Screen=="find") { if(DropFindOnce) { DropFindOnce=false;return; } if(p.X>.78 && p.Y>.82) return; if(StrictNavigation && (p.X>.3 || p.Y<.65 || p.Y>.82)) throw new Exception("Wrong match coordinate");FindClicks++;Screen="army"; }
             else if(Screen=="army") { if(DropArmyOnce) { DropArmyOnce=false;return; } if(StrictNavigation && (p.X<.78 || p.Y<.82)) throw new Exception("Wrong army coordinate");ArmyClicks++;Screen="scout"; }
             else if(Screen=="scout") { if(ScoutWithoutNext && p.X<.2 && p.Y<.85) { ExpiredSearches++;ScoutWithoutNext=false;Screen="home"; } else if(p.X>.8 && p.Y<.85) { NextClicks++; } else { Selections++;Screen="deploy"; } }
-            else if(Screen=="deploy") { Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now;Screen=SpellsRequired && !WrongSpell?"battle":LongBattle?"fighting":"result"; } }
+            else if(Screen=="deploy") { Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now;Screen=SpellsRequired && (!WrongSpell || KeySelection)?"battle":LongBattle?"fighting":"result"; } }
             else if((Screen=="battle" || Screen=="spells") && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
             else if(Screen=="battle") { if(p.Y<.85) throw new Exception("Expected spell card selection");SpellSelections++;Screen="spells"; }
             else if(Screen=="spells") { if(p.Y>=.80) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%11==0) Screen=LongBattle?"fighting":"result"; }
@@ -94,11 +104,13 @@ namespace ClashPekkas {
             Assert(game.Deployments==250 && game.Selections==10,"exactly 25 deployment clicks per battle");
             Assert(game.SpellSelections==10 && game.SpellCasts==110,"exactly 11 spell casts per battle");
             Assert(game.HomeClicks==10 && game.FindClicks==10 && game.ArmyClicks==10 && game.ReturnClicks==10,"home, matchmaking, army confirmation, and return once per battle");
+            Assert(game.SelectionKeys.Count==0 && game.TroopCardReads==10 && game.SpellCardChecks==10,"BlueStacks keeps card recognition and mouse selection");
             for(int t=0;t<100;t++) runner.Tick(now.AddHours(1));
             Assert(game.Deployments==250 && game.SpellCasts==110 && game.HomeClicks==10,"hard stop prevents eleventh battle or further spell casts");
             game=new FakeGame();runner=new Runner(game,new Settings{Battles=30,Platform="GooglePlayGames"},30,false,logs.Add,new Random(3));runner.Start(now);
             for(int t=0;t<20000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
             Assert(!runner.Active && runner.Completed==30 && game.Deployments==750 && game.SpellCasts==330 && game.HomeClicks==30,"thirty Google battles finish with exactly 750 troops and 330 spells");
+            Assert(game.TroopCardReads==0 && game.SpellCardChecks==0 && game.SelectionKeys.SequenceEqual(Enumerable.Range(0,60).Select(i=>i%2==0?Keys.D1:Keys.A)),"Google uses exactly 1 then A per battle without troop OCR or spell matching");
             runner.Tick(now.AddHours(10));Assert(game.HomeClicks==30 && game.Deployments==750,"thirty-battle run cannot start battle thirty-one");
             bool limitRejected=false;try {new Runner(new FakeGame(),new Settings(),31,false,logs.Add,new Random());}catch{limitRejected=true;}
             Assert(limitRejected,"more than thirty battles rejected");
@@ -175,9 +187,20 @@ namespace ClashPekkas {
             game=new FakeGame{UnreadableFirst=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
             for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
             Assert(!runner.Active && runner.Completed==1 && game.LootReads==3 && game.NextClicks==0 && game.Deployments==25,"Google unreadable loot attacks the current base after three attempts and completes the battle");
-            game=new FakeGame{UnreadableFirst=true,WrongTroop=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            game=new FakeGame{UnreadableFirst=true,WrongTroop=true,WrongSpell=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
             for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
-            Assert(game.LootReads==3 && game.Deployments==0 && game.NextClicks==0 && runner.Message.Contains("troop card"),"unreadable-loot fallback still verifies the troop card before any deployment");
+            Assert(game.LootReads==3 && runner.Completed==1 && game.Deployments==25 && game.SpellCasts==11 && game.NextClicks==0 && game.TroopCardReads==0 && game.SpellCardChecks==0,"Google key selection works when card recognition would fail");
+            game=new FakeGame{RejectKey=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
+            Assert(!runner.Active && game.Deployments==0 && game.SelectionKeys.Count==0,"failed selection key stops before any troop placement");
+            game=new FakeGame{SpellsRequired=false};runner=new Runner(game,new Settings{Platform="GooglePlayGames",UseSpells=false},1,false,logs.Add,new Random(2));runner.Start(now);
+            for(int t=0;t<1000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*100));
+            Assert(runner.Completed==1 && game.SelectionKeys.SequenceEqual(new[]{Keys.D1}) && game.SpellCasts==0,"Google sends no spell key when spells are disabled");
+            game=new FakeGame{Screen="scout"};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,true,logs.Add,new Random(2));runner.Start(now);
+            runner.Stop("Stopped before selection");runner.Tick(now.AddHours(1));
+            Assert(game.SelectionKeys.Count==0 && game.Deployments==0,"Stop cancels pending keyboard selection");
+            var inputType=typeof(Native).GetNestedType("Input",System.Reflection.BindingFlags.NonPublic);
+            Assert(System.Runtime.InteropServices.Marshal.SizeOf(inputType)==(IntPtr.Size==8?40:28),"mouse and keyboard INPUT union has the required Windows ABI size");
             game=new FakeGame{UnreadableFirst=true};runner=new Runner(game,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(2));runner.Start(now);
             for(int t=0;t<1000 && game.LootReads<2;t++) runner.Tick(now.AddMilliseconds(t*100));
             runner.Stop("Stopped during loot retries");runner.Tick(now.AddHours(1));
@@ -229,13 +252,22 @@ namespace ClashPekkas {
             var previousConfig=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(oldGeometry));
             previousConfig.Remove("NormalSpellGuide");previousConfig.Remove("ReverseSpellGuide");
             var adjusted=Settings.FromJson(serializer.Serialize(previousConfig));
-            Assert(adjusted.GeometryVersion==3 && adjusted.AttackDurationSeconds==30,"geometry migration preserves the selected duration");
+            Assert(adjusted.GeometryVersion==4 && adjusted.AttackDurationSeconds==30,"geometry migration preserves the selected duration");
             for(int i=2;i<4;i++)Assert(adjusted.Normal[i].X==oldGeometry.Normal[i].X && adjusted.Normal[i].Y==oldGeometry.Normal[i].Y,"working lower-left green line is unchanged");
             for(int i=0;i<2;i++) {
                 Assert(adjusted.Normal[i].X<oldGeometry.Normal[i].X && adjusted.Normal[i].Y<oldGeometry.Normal[i].Y,"upper-left moves outward and upward");
                 Assert(adjusted.Reverse[i].X>oldGeometry.Reverse[i].X && adjusted.Reverse[i].Y<oldGeometry.Reverse[i].Y,"upper-right moves outward and upward");
             }
-            foreach(Vec p in Plan.Make(adjusted,true,new Random(11)).Where(p=>p.Y>.5))Assert(p.X+.78*p.Y>1.25 && p.X+.78*p.Y<1.27 && p.Y<=.83,"lower-right points stay in the marked grass corridor and above the troop bar");
+            foreach(Vec p in Plan.Make(adjusted,true,new Random(11)).Where(p=>p.Y>.5))Assert(p.X+.78*p.Y>1.28 && p.X+.78*p.Y<1.30 && p.Y<=.83,"lower-right points stay beyond the tile edge and above the troop bar");
+            var tileEdge=new Settings{GeometryVersion=3,Battles=2,AttackDurationSeconds=30};
+            tileEdge.Reverse[2]=new Vec(.86,.51);tileEdge.Reverse[3]=new Vec(.6104,.83);
+            var grass=Settings.FromJson(serializer.Serialize(tileEdge));
+            Assert(grass.GeometryVersion==4 && grass.Battles==2 && grass.AttackDurationSeconds==30,"version 3 migration keeps run preferences");
+            for(int i=0;i<4;i++)Assert(grass.Normal[i].X==tileEdge.Normal[i].X && grass.Normal[i].Y==tileEdge.Normal[i].Y,"all normal L endpoints stay unchanged");
+            for(int i=0;i<4;i++)Assert(Math.Abs((grass.Reverse[i].X-tileEdge.Reverse[i].X)-(i<2?0:.03))<1e-10 && grass.Reverse[i].Y==tileEdge.Reverse[i].Y,"only lower-right endpoints move outward by 48 normalized pixels");
+            tileEdge.Reverse[2].X=.87;
+            var customGrass=Settings.FromJson(serializer.Serialize(tileEdge));
+            Assert(customGrass.Reverse[2].X==.87 && customGrass.Reverse[3].X==.6104,"custom lower-right paths are preserved");
             foreach(bool orientation in new[]{false,true}) {
                 var before=Plan.OpeningSpells(oldGeometry,orientation,new Random(6));var after=Plan.OpeningSpells(adjusted,orientation,new Random(6));
                 Assert(before.Zip(after,(a,b)=>a.X==b.X && a.Y==b.Y).All(v=>v),"deployment correction preserves opening spell locations");

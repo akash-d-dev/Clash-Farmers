@@ -36,6 +36,8 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 
 Settings save as you change them and are locked during a run. Existing gold/elixir defaults remain 500,000 each; dark elixir defaults to zero. Default troop count is 25 and default duration is 90 seconds. The old duration bounds migrate to their midpoint. Known old short deployment lines migrate to the wider outer-strip preset.
 
+Gold and elixir arrows step by 100,000; dark elixir arrows step by 10,000. All three have a minimum of zero, and you can still type an exact value. Numeric inputs and loot logs use international comma grouping, such as `500,000` and `1,000,000`, regardless of the Windows number-grouping preference.
+
 ## Platforms and Stop
 
 Google Play Games uses desktop screenshots and mouse input. The separate Clash of Clans window must stay visible and active; the Google launcher can be closed. Start maximizes the game, detects its rendered game area, excludes the sidebar/title bar and desktop gaps, and clips small custom-frame overlaps. Leave the mouse alone. Switching windows, covering the game, moving/resizing, or minimizing stops desktop control.
@@ -48,9 +50,11 @@ The window/taskbar title shows the activity first, followed by remaining battles
 
 ## Deployment and spells
 
-The runner selects the leftmost troop stack in the verified attack HUD, using its stack marker and position rather than a P.E.K.K.A portrait. It does not cap your requested clicks to the card inventory or switch cards when the stack runs out. Load the intended troop in the first slot and set its count yourself. A missing/unrecognized first troop card stops before deployment.
+Google Play Games selects the first troop with the default `1` key and the first spell with `A`. It does not OCR troop-card counts or compare spell-card images for this platform. Keep the game's default key mappings enabled, load the intended troop in the first troop slot and Haste in the first spell slot, and keep the game active. Selection sends a short key press and release; Stop, focus/visibility, and held-key guards remain enforced. Loot and navigation still use screen recognition.
 
-Troops split evenly between the two sides of a randomly selected L; odd counts put the extra troop on a random side. Each side has evenly spaced slots, with jitter of ±20% of the average spacing. Fixed paths follow the outer grass strip and cover the visible side above the troop bar. Geometry version 3 moves the upper paths away from buildings and gives the lower-right grass corridor its own coordinates; the working lower-left path remains unchanged. Existing version 2 presets migrate automatically without changing spell locations or run preferences. The upper side deploys first, allowing scouting-only boost buttons to disappear before lower-side placements.
+BlueStacks selects the leftmost troop stack using its stack marker and position rather than a P.E.K.K.A portrait, and checks the Haste reference image before clicking its saved spell-card position. A missing/unrecognized troop card stops before deployment. Both platforms use your configured troop click count without capping it to the actual inventory, switching cards, or changing the eleven-spell sequence.
+
+Troops split evenly between the two sides of a randomly selected L; odd counts put the extra troop on a random side. Each side has evenly spaced slots, with jitter of ±20% of the average spacing. Fixed paths follow the outer grass strip and cover the visible side above the troop bar. Geometry version 4 adds a 48-pixel horizontal margin beyond the former lower-right tile-edge path in the normalized 1600×900 view. The other three paths and spell locations remain unchanged. Known older presets migrate automatically while preserving custom paths and run preferences. The upper side deploys first, allowing scouting-only boost buttons to disappear before lower-side placements.
 
 Eleven Haste spells remain supported: three along each inward entry path, then a 5–10 second pause followed by five central casts at 2–5 second intervals. The opening six are scheduled 100 ms apart without OCR between casts. Opening targets aim for 120-pixel separation and central targets for 90 pixels in the normalized 1600×900 view. Bounded sampling chooses the best separation if the available area cannot meet those targets. Some effect-circle overlap can remain. Recognition and input overhead add to scheduled intervals.
 

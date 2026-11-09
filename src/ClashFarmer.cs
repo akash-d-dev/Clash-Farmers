@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -71,14 +72,15 @@ namespace ClashPekkas {
             for(int i=0;i<2;i++) lines[i]=new Vec(lines[i].X+(reverse?.027:-.027),lines[i].Y-.060);
             if(reverse) {
                 // The lower-right grass corridor is narrower than its mirrored shoreline.
-                // Use its own line between the building boundary and the forest.
-                lines[2]=new Vec(.86,.51);
-                lines[3]=new Vec(.6104,.83); // Stop above the troop bar.
+                // Keep a 48px horizontal margin beyond the former tile-edge line
+                // in the normalized 1600px-wide view, without moving toward the HUD.
+                lines[2]=new Vec(.89,.51);
+                lines[3]=new Vec(.6404,.83); // Stop above the troop bar.
             }
             return lines;
         }
         public Vec TroopButton=new Vec(.185,.93);
-        public int GeometryVersion=3;
+        public int GeometryVersion=4;
         public static Settings FromJson(string text) {
             var json=new JavaScriptSerializer();var data=json.Deserialize<Dictionary<string,object>>(text);var settings=json.Deserialize<Settings>(text);
             if(!data.ContainsKey("GeometryVersion")) {
@@ -95,7 +97,13 @@ namespace ClashPekkas {
                     }
                 }
             }
-            settings.GeometryVersion=3;
+            if(settings.GeometryVersion==3 && settings.Reverse!=null && settings.Reverse.Length==4
+                && Math.Abs(settings.Reverse[2].X-.86)<.00001 && Math.Abs(settings.Reverse[2].Y-.51)<.00001
+                && Math.Abs(settings.Reverse[3].X-.6104)<.00001 && Math.Abs(settings.Reverse[3].Y-.83)<.00001) {
+                Vec[] replacement=OuterLines(true);
+                settings.Reverse[2]=replacement[2];settings.Reverse[3]=replacement[3];
+            }
+            settings.GeometryVersion=4;
             settings.Validate();return settings;
         }
         public void Validate() {
@@ -185,6 +193,7 @@ namespace ClashPekkas {
         bool SpellVisible();
         LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false);
         void Click(Vec point);
+        void PressKey(Keys key);
     }
     public interface ICapturedGame : IGame,IDisposable { Bitmap Capture(); }
     public sealed class Runner {
@@ -228,7 +237,7 @@ namespace ClashPekkas {
             lootFailures=0;
             lootConfirmations=previousLoot!=null && reading.Gold==previousLoot.Gold && reading.Elixir==previousLoot.Elixir && reading.DarkElixir==previousLoot.DarkElixir ? lootConfirmations+1 : 1;
             previousLoot=reading;
-            string amounts="gold "+(settings.MinGold>0?reading.Gold.ToString("N0"):"unchecked")+", elixir "+(settings.MinElixir>0?reading.Elixir.ToString("N0"):"unchecked")+", dark elixir "+(settings.MinDarkElixir>0?reading.DarkElixir.ToString("N0"):"unchecked");
+            string amounts="gold "+(settings.MinGold>0?reading.Gold.ToString("N0",CultureInfo.InvariantCulture):"unchecked")+", elixir "+(settings.MinElixir>0?reading.Elixir.ToString("N0",CultureInfo.InvariantCulture):"unchecked")+", dark elixir "+(settings.MinDarkElixir>0?reading.DarkElixir.ToString("N0",CultureInfo.InvariantCulture):"unchecked");
             if(lootConfirmations<2) { log("Available loot: "+amounts+". Confirming...");next=now.AddMilliseconds(500);return false; }
             if(reading.Gold<settings.MinGold || reading.Elixir<settings.MinElixir || reading.DarkElixir<settings.MinDarkElixir) {
                 SkipBase(nextButton,now,"Below loot target: "+amounts+".");return false;
@@ -298,15 +307,17 @@ namespace ClashPekkas {
                 else if (State=="Scouting" && Ready("next",out point)) {
                     scannedNavigation=false;
                     if(settings.FilterLoot && !AcceptLoot(point,now)) return;
-                    Vec troopCard=game.FirstTroopCard();
-                    if (troopCard==null) { Stop("Stopped: first troop card is not available. Load troops in the first slot before starting."); return; }
-                    spellsAvailable=settings.UseSpells && game.SpellVisible();
+                    Vec troopCard=settings.GooglePlay ? null : game.FirstTroopCard();
+                    if (!settings.GooglePlay && troopCard==null) { Stop("Stopped: first troop card is not available. Load troops in the first slot before starting."); return; }
+                    spellsAvailable=settings.UseSpells && (settings.GooglePlay || game.SpellVisible());
                     if(settings.UseSpells && !spellsAvailable) log("Haste card not recognized before deployment. Spells will be skipped for this battle.");
                     bool reverse=random.Next(2)==1;reverseAttack=reverse;spellsCast=0;spellHistory.Clear();
                     plan=Plan.Make(settings,reverse,random); deployed=0;
                     int upper=plan.Count(p=>p.Y<.5);
                     log("Battle "+(Completed+1)+": "+(reverse ? "reverse L" : "normal L")+", "+upper+" + "+(settings.Troops-upper)+" troop clicks on the outer strip.");
-                    game.Click(troopCard); Go("Deploying",now); next=now.AddMilliseconds(350);
+                    if(settings.GooglePlay) { game.PressKey(Keys.D1);log("First troop selected with Google Play Games key 1."); }
+                    else game.Click(troopCard);
+                    Go("Deploying",now); next=now.AddMilliseconds(350);
                 }
                 else if(State=="Scouting" && (now-entered).TotalSeconds>25) {
                     Vec end=game.Find("end");
@@ -333,8 +344,9 @@ namespace ClashPekkas {
                     }
                 }
                 else if(State=="Select spells") {
-                    game.Click(settings.SpellButton);openingSpells=Plan.OpeningSpells(settings,reverseAttack,random);
-                    log("Haste selected: fast 3 + 3 burst inward along the entry paths.");
+                    if(settings.GooglePlay) game.PressKey(Keys.A);else game.Click(settings.SpellButton);
+                    openingSpells=Plan.OpeningSpells(settings,reverseAttack,random);
+                    log(settings.GooglePlay ? "First spell selected with Google Play Games key A: fast 3 + 3 burst inward along the entry paths." : "Haste selected: fast 3 + 3 burst inward along the entry paths.");
                     Go("Opening spells",now);next=now.AddMilliseconds(100);
                 }
                 else if(State=="Opening spells") {
@@ -509,7 +521,12 @@ namespace ClashPekkas {
         [StructLayout(LayoutKind.Sequential)] public struct Rect { public int L,T,R,B; }
         [StructLayout(LayoutKind.Sequential)] public struct Pt { public int X,Y; }
         [StructLayout(LayoutKind.Sequential)] struct MouseInput { public int X,Y; public uint Data,Flags,Time; public IntPtr Extra; }
-        [StructLayout(LayoutKind.Sequential)] struct Input { public uint Type; public MouseInput Mouse; }
+        [StructLayout(LayoutKind.Sequential)] struct KeyboardInput { public ushort Key,Scan; public uint Flags,Time; public IntPtr Extra; }
+        [StructLayout(LayoutKind.Explicit)] struct InputData {
+            [FieldOffset(0)] public MouseInput Mouse;
+            [FieldOffset(0)] public KeyboardInput Keyboard;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct Input { public uint Type; public InputData Data; }
         public delegate bool EnumProc(IntPtr hwnd,IntPtr arg);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback,IntPtr arg);
@@ -620,11 +637,25 @@ namespace ClashPekkas {
             if (!view.Contains(p.X,p.Y) || GetAncestor(WindowFromPoint(p),2)!=window) throw new Exception("Click blocked: another window covers the game.");
             if (!SetCursorPos(p.X,p.Y)) throw new Exception("Could not position the mouse.");
             if (Escape()) throw new Exception("Emergency stop.");
-            var down=new Input{Type=0,Mouse=new MouseInput{Flags=2}};
-            var up=new Input{Type=0,Mouse=new MouseInput{Flags=4}};
+            var down=new Input{Type=0,Data=new InputData{Mouse=new MouseInput{Flags=2}}};
+            var up=new Input{Type=0,Data=new InputData{Mouse=new MouseInput{Flags=4}}};
             if (SendInput(1,new[]{down},Marshal.SizeOf(typeof(Input)))!=1) throw new Exception("Mouse input failed.");
             try { System.Threading.Thread.Sleep(35); }
             finally { SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input))); }
+        }
+        public static void PressKey(IntPtr window,Keys key) {
+            if(key!=Keys.D1 && key!=Keys.A) throw new Exception("Only the first troop (1) and first spell (A) selection keys are supported.");
+            if(Escape() || window==IntPtr.Zero || GetForegroundWindow()!=window) throw new Exception("Stop key pressed or the game lost focus.");
+            foreach(int held in new[]{0x10,0x11,0x12,0x5B,0x5C,(int)key})
+                if((GetAsyncKeyState(held)&0x8000)!=0) throw new Exception("Release held keyboard keys before running Google Play Games selection.");
+            // Physical-key scan codes are accepted by game controls independently of text entry.
+            ushort scan=(ushort)(key==Keys.D1?0x02:0x1E);
+            var down=new Input{Type=1,Data=new InputData{Keyboard=new KeyboardInput{Scan=scan,Flags=8}}};
+            var up=new Input{Type=1,Data=new InputData{Keyboard=new KeyboardInput{Scan=scan,Flags=10}}};
+            int size=Marshal.SizeOf(typeof(Input));
+            if(SendInput(1,new[]{down},size)!=1) throw new Exception("Selection key press failed. Check the game's default key mappings.");
+            try { System.Threading.Thread.Sleep(35); }
+            finally { if(SendInput(1,new[]{up},size)!=1) throw new Exception("Selection key release failed. Run stopped."); }
         }
     }
     public sealed class ScreenReader {
@@ -735,6 +766,7 @@ namespace ClashPekkas {
         public abstract void Guard();
         public abstract Bitmap Capture();
         public abstract void Click(Vec point);
+        public virtual void PressKey(Keys key) { throw new NotSupportedException("Keyboard selection is only available for Google Play Games desktop control."); }
         protected virtual bool GoogleLayout { get { return false; } }
         public Vec Find(string button) { using(Bitmap image=Capture()) return reader.Find(image,button); }
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { using(Bitmap image=Capture()) return reader.ReadLoot(image,GoogleLayout,gold,elixir,darkElixir); }
@@ -777,6 +809,10 @@ namespace ClashPekkas {
             }
         }
         public override void Click(Vec point) { Guard(); Native.Click(window,viewport,point); }
+        public override void PressKey(Keys key) {
+            if(!settings.GooglePlay) throw new NotSupportedException("BlueStacks uses troop and spell card clicks.");
+            Guard();Native.PressKey(window,key);
+        }
     }
     public sealed class AdbClient {
         readonly string executable,serial;
@@ -911,6 +947,12 @@ namespace ClashPekkas {
         public MainForm(string folder,OcrReader ocr) : this(folder,ocr,null,Native.ActivatePlayer) { }
         IntPtr PickPlayer() { return choosePlayer!=null ? choosePlayer() : settings.GooglePlay ? Native.FindGoogleWindow() : Native.FindWindow(); }
         public MainForm(string folder,OcrReader ocr,PlayerPicker choosePlayer,PlayerActivator activatePlayer) {
+            // Use international number grouping in this app without changing Windows settings.
+            var displayCulture=(CultureInfo)CultureInfo.CurrentCulture.Clone();
+            displayCulture.NumberFormat.NumberGroupSizes=new[]{3};
+            displayCulture.NumberFormat.NumberGroupSeparator=",";
+            displayCulture.NumberFormat.NumberDecimalSeparator=".";
+            System.Threading.Thread.CurrentThread.CurrentCulture=displayCulture;
             this.folder=folder;this.ocr=ocr;
             this.choosePlayer=choosePlayer;this.activatePlayer=activatePlayer;
             AppFiles.Initialize(folder);
@@ -942,6 +984,7 @@ namespace ClashPekkas {
             AddInput(flow,goldMinimum,"goldMinimum","Gold min",15,55,15,0,99999999,settings.MinGold,true);
             AddInput(flow,elixirMinimum,"elixirMinimum","Elixir min",245,55,245,0,99999999,settings.MinElixir,true);
             AddInput(flow,darkMinimum,"darkMinimum","Dark elixir min",475,55,475,0,99999999,settings.MinDarkElixir,true);
+            goldMinimum.Increment=100000;elixirMinimum.Increment=100000;darkMinimum.Increment=10000;
             flow.Controls.Add(new Label{Text="Duration varies by ±5s (3–180s). Zero loot minimum means no check for that resource.",AutoSize=true,Location=new Point(15,112)});Controls.Add(flow);
             Controls.Add(new Label{Text="Battles",AutoSize=true,Location=new Point(22,301)});
             battleCount.Name="battleCount";battleCount.Minimum=1;battleCount.Maximum=30;battleCount.Value=settings.Battles;
@@ -1042,6 +1085,7 @@ namespace ClashPekkas {
             status.Text=preview ? "Preparing a troop-position screenshot. No game clicks will be sent." : (useBackground ? "Starting through the local Android connection in 3 seconds..." : "Opening "+settings.PlayerName+". Starting from your main village in 3 seconds...");
             Write(status.Text);Write("Run: "+settings.Troops+" troop clicks, "+settings.AttackDurationSeconds+"s ±5s after deployment; minimum gold "+settings.MinGold+", elixir "+settings.MinElixir+", dark elixir "+settings.MinDarkElixir+".");
             Write(useBackground ? "Control: local Android connection. Desktop focus and mouse are not used." : "Control: desktop mouse. "+settings.PlayerName+" must remain active.");
+            if(settings.GooglePlay) Write("Selection uses the game's default keys: 1 for the first troop, A for the first spell. Load the intended troop and Haste in those first slots.");
             if(!useBackground) activatePlayer(target);
         }
         void Finish(string reason,bool alreadyLogged) {
