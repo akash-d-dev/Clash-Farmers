@@ -4,7 +4,14 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 namespace ClashPekkas {
-    public sealed class FakeGame : IGame {
+    public sealed class FakeGame : IGame,ISupportGame {
+        public bool SiegeAvailable,HeroAvailable;public int SiegeDeployments,HeroDeployments;
+        public readonly List<Vec> SupportPoints=new List<Vec>();
+        public bool TrySelectSupport(Keys key) {
+            Guard();if(!(key==Keys.Z?SiegeAvailable:HeroAvailable))return false;
+            if(Screen!="scout")throw new Exception("Support selected on wrong screen");
+            SelectionKeys.Add(key);Screen=key==Keys.Z?"supportSiege":"supportHero";return true;
+        }
         public string Screen="home"; public int Deployments,Selections,SpellSelections,SpellCasts,HomeClicks,FindClicks,ArmyClicks,ReturnClicks;
         public bool Occluded, Missing, WrongTroop,MissingLaunch,WrongSpell,SpellsRequired=true;
         public int TroopCardReads,SpellCardChecks;public bool RejectKey,KeySelection;
@@ -13,7 +20,10 @@ namespace ClashPekkas {
         public int NextClicks,LootReads,ReturnReadsDuringOpening,ExpiredSearches;
         public bool UnreadableFirst,ScoutWithoutNext;
         public bool LongBattle,NoStar,DropArmyOnce,DropFindOnce,UnknownDialog,StrictNavigation;
-        public int TroopsPerBattle=25;
+        public int TroopsPerBattle=25,SpellsPerBattle=11;
+        public int SelectionDelayMs,TroopClickDelayMs;
+        public DateTime TroopSelectedAt,SpellSelectedAt;
+        public readonly List<DateTime> TroopStarts=new List<DateTime>();
         public int EndClicks,ConfirmClicks,PanelCloses;public DateTime TroopsDone,EndedAt;
         public readonly Dictionary<string,int> Reads=new Dictionary<string,int>();
         public List<LootReading> Opponents=new List<LootReading>{new LootReading(1000000,1000000)};
@@ -27,7 +37,7 @@ namespace ClashPekkas {
             if(button=="launch" && Screen=="army" && !MissingLaunch) return new Vec(.87,.9);
             if(button=="next" && Screen=="scout" && !ScoutWithoutNext) return new Vec(.9,.7);
             if(button=="end" && Screen=="scout" && ScoutWithoutNext) return new Vec(.1,.78);
-            if(button=="retreat" && (Screen=="fighting" || Screen=="spells" || Screen=="battle")) return new Vec(.1,.78);
+            if(button=="retreat" && (Screen=="deploy" || Screen=="fighting" || Screen=="spells" || Screen=="battle")) return new Vec(.1,.78);
             if(button=="surrenderTitle" && Screen=="confirm" && !UnknownDialog) return new Vec(.5,.3);
             if(button=="confirmSurrender" && Screen=="confirm") return new Vec(.6,.63);
             if(button=="return") { if(Screen=="spells" && SpellCasts<6) ReturnReadsDuringOpening++;if(Screen=="result") return new Vec(.5,.8); }
@@ -37,23 +47,26 @@ namespace ClashPekkas {
         public bool SpellVisible() { SpellCardChecks++;return !WrongSpell; }
         public void PressKey(Keys key) {
             Guard();if(RejectKey) throw new Exception("selection input failed");
-            if(key==Keys.D1 && Screen=="scout") {KeySelection=true;Selections++;Screen="deploy";}
-            else if(key==Keys.A && Screen=="battle") {SpellSelections++;Screen="spells";}
+            if((Screen=="battle" || Screen=="fighting") && HeroAvailable && new[]{Keys.Q,Keys.W,Keys.E,Keys.R}.Contains(key)){if(Deployments%TroopsPerBattle!=0 || Now<TroopsDone.AddMilliseconds(350))throw new Exception("Ability before army finished settling");SelectionKeys.Add(key);return;}
+            if(key==Keys.D1 && Screen=="scout") {if(SelectionDelayMs>0)System.Threading.Thread.Sleep(SelectionDelayMs);TroopSelectedAt=Now.AddMilliseconds(SelectionDelayMs);KeySelection=true;Selections++;Screen="deploy";}
+            else if(key==Keys.A && Screen=="battle") {SpellSelectedAt=Now;SpellSelections++;Screen="spells";}
             else throw new Exception("Unexpected selection key or screen");
             SelectionKeys.Add(key);
         }
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { LootReads++;if(TransientLoot.Count>0) return TransientLoot.Dequeue();return UnreadableFirst && NextClicks==0 ? null : Opponents[Math.Min(NextClicks,Opponents.Count-1)]; }
         public void Click(Vec p) {
             Guard();
-            if(Screen=="home") { if(StrictNavigation && (p.X>.2 || p.Y<.82)) throw new Exception("Wrong home coordinate");HomeClicks++;Screen="find"; }
+            if(Screen=="supportSiege" || Screen=="supportHero") {if(Screen=="supportSiege")SiegeDeployments++;else HeroDeployments++;SupportPoints.Add(p);Screen="scout";}
+            else if(Screen=="home") { if(StrictNavigation && (p.X>.2 || p.Y<.82)) throw new Exception("Wrong home coordinate");HomeClicks++;Screen="find"; }
             else if((Screen=="army" && p.X>.94 && p.Y<.15) || (Screen=="find" && p.X>.65 && p.X<.75 && p.Y>.8 && p.Y<.85)) { PanelCloses++;Screen="home"; }
             else if(Screen=="find") { if(DropFindOnce) { DropFindOnce=false;return; } if(p.X>.78 && p.Y>.82) return; if(StrictNavigation && (p.X>.3 || p.Y<.65 || p.Y>.82)) throw new Exception("Wrong match coordinate");FindClicks++;Screen="army"; }
             else if(Screen=="army") { if(DropArmyOnce) { DropArmyOnce=false;return; } if(StrictNavigation && (p.X<.78 || p.Y<.82)) throw new Exception("Wrong army coordinate");ArmyClicks++;Screen="scout"; }
             else if(Screen=="scout") { if(ScoutWithoutNext && p.X<.2 && p.Y<.85) { ExpiredSearches++;ScoutWithoutNext=false;Screen="home"; } else if(p.X>.8 && p.Y<.85) { NextClicks++; } else { Selections++;Screen="deploy"; } }
-            else if(Screen=="deploy") { Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now;Screen=SpellsRequired && (!WrongSpell || KeySelection)?"battle":LongBattle?"fighting":"result"; } }
+            else if(Screen=="deploy" && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
+            else if(Screen=="deploy") { TroopStarts.Add(Now);if(TroopClickDelayMs>0)System.Threading.Thread.Sleep(TroopClickDelayMs);Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now.AddMilliseconds(TroopClickDelayMs);Screen=SpellsRequired && (!WrongSpell || KeySelection)?"battle":LongBattle?"fighting":"result"; } }
             else if((Screen=="battle" || Screen=="spells") && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
             else if(Screen=="battle") { if(p.Y<.85) throw new Exception("Expected spell card selection");SpellSelections++;Screen="spells"; }
-            else if(Screen=="spells") { if(p.Y>=.80) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%11==0) Screen=LongBattle?"fighting":"result"; }
+            else if(Screen=="spells") { if(p.Y>=.835) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%SpellsPerBattle==0) Screen=LongBattle?"fighting":"result"; }
             else if(Screen=="fighting") { EndClicks++;EndedAt=Now;Screen="confirm"; }
             else if(Screen=="confirm") { ConfirmClicks++;Screen="result"; }
             else if(Screen=="result") { ReturnClicks++;Screen="home"; }
@@ -62,31 +75,135 @@ namespace ClashPekkas {
     }
     public static class Tests {
         static void Assert(bool ok,string name) { if(!ok) throw new Exception("TEST FAILED: "+name); }
+        static bool OnDepth(Vec point,DeploymentSide side,int depth) {
+            double d=depth/100.0;
+            if(depth==100)return Math.Abs(point.X-.5)<1e-10 && Math.Abs(point.Y-.45)<1e-10;
+            var p=new Vec((point.X-.5*d)/(1-d),(point.Y-.45*d)/(1-d));
+            Vec a=side.A,b=side.B;
+            return Math.Abs((p.X-a.X)*(b.Y-a.Y)-(p.Y-a.Y)*(b.X-a.X))<1e-10 && p.X>=Math.Min(a.X,b.X)-1e-10 && p.X<=Math.Max(a.X,b.X)+1e-10 && p.Y>=Math.Min(a.Y,b.Y)-1e-10 && p.Y<=Math.Max(a.Y,b.Y)+1e-10;
+        }
         public static string Run() {
             Settings settings=new Settings{FastNavigation=false};var logs=new List<string>();DateTime now=new DateTime(2026,1,1);
             var game=new FakeGame();var runner=new Runner(game,settings,10,false,logs.Add,new Random(3));runner.Start(now);
             for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
             Assert(!runner.Active && runner.Completed==10,"ten battles finish");
-            foreach(int troopTotal in new[]{1,2,25,500}) {
-                var variableGame=new FakeGame{TroopsPerBattle=troopTotal};var variableSettings=new Settings{Troops=troopTotal};
+            foreach(string mode in new[]{"LShape","FourSides"}) foreach(int troopTotal in new[]{1,2,3,9,20,25,30,500}) {
+                var variableGame=new FakeGame{TroopsPerBattle=troopTotal};var variableSettings=new Settings{Troops=troopTotal,DeploymentMode=mode,EndBattleEarly=false};
                 var variableRunner=new Runner(variableGame,variableSettings,1,false,logs.Add,new Random(troopTotal));variableRunner.Start(now);
                 for(int t=0;t<10000 && variableRunner.Active;t++){variableGame.Now=now.AddMilliseconds(t*100);variableRunner.Tick(variableGame.Now);}
                 Assert(variableRunner.Completed==1 && variableGame.Deployments==troopTotal && variableGame.Selections==1,"configured troop count uses only one card and exact click attempts");
                 foreach(bool mirror in new[]{false,true}) for(int seed=0;seed<25;seed++) {
-                    var positions=Plan.Make(variableSettings,mirror,new Random(seed));int upper=positions.Count(p=>p.Y<.5);
-                    Assert(positions.Count==troopTotal && Math.Abs(upper-(troopTotal-upper))<=1,"even split with at most one extra troop");
-                    for(int arm=0;arm<2;arm++) {
-                        var side=positions.Where(p=>(p.Y<.5?0:1)==arm).ToList();var endpoints=(mirror?variableSettings.Reverse:variableSettings.Normal);Vec a=endpoints[arm*2],b=endpoints[arm*2+1];
+                    var layout=Plan.Troops(variableSettings,mirror,new Random(seed));
+                    Assert(layout.Points.Count==troopTotal && layout.Counts.Max()-layout.Counts.Min()<=1,"balanced side counts with exact total");
+                    Assert(layout.Sides.Length==(mode=="FourSides"?4:2),"selected side count");
+                    for(int arm=0;arm<layout.Sides.Length;arm++) {
+                        var side=layout.Points.Where((p,i)=>layout.PointSides[i]==arm).ToList();Vec a=layout.Sides[arm].A,b=layout.Sides[arm].B;
+                        foreach(Vec point in side) {
+                            double cross=(point.X-a.X)*(b.Y-a.Y)-(point.Y-a.Y)*(b.X-a.X);
+                            Assert(Math.Abs(cross)<1e-10 && point.Y>=Math.Min(a.Y,b.Y) && point.Y<=Math.Max(a.Y,b.Y),"all troop points stay on saved grass segments");
+                        }
                         double length=Plan.PixelDistance(a,b);
                         for(int i=1;i<side.Count;i++) Assert(Plan.PixelDistance(side[i-1],side[i])>=length*.59/side.Count,"jitter preserves a minimum gap between troop placements");
                     }
                 }
             }
+            foreach(int troopTotal in new[]{9,30}) {
+                var latencyGame=new FakeGame{TroopsPerBattle=troopTotal,SelectionDelayMs=400,TroopClickDelayMs=35};
+                var latencyRunner=new Runner(latencyGame,new Settings{Platform="GooglePlayGames",Troops=troopTotal},1,false,logs.Add,new Random(8));latencyRunner.Start(now);
+                for(int t=0;t<20000 && latencyRunner.Active;t++){latencyGame.Now=now.AddMilliseconds(t*40);latencyRunner.Tick(latencyGame.Now);}
+                Assert(latencyRunner.Completed==1 && latencyGame.Deployments==troopTotal,"latency does not change configured troop count");
+                Assert((latencyGame.TroopStarts[0]-latencyGame.TroopSelectedAt).TotalMilliseconds>=500,"selection settles after input returns");
+                Assert((latencyGame.TroopStarts[1]-latencyGame.TroopStarts[0]).TotalMilliseconds>=535,"first placement settles through scouting transition");
+                Assert((latencyGame.SpellSelectedAt-latencyGame.TroopsDone).TotalMilliseconds>=350,"final mouse release settles before spell selection");
+            }
+            Assert(Settings.FromJson("{}").DeploymentMode=="LShape" && Settings.FromJson("{}").Spells==11,"legacy settings default to L and eleven spells");
+            foreach(string mode in new[]{"LShape","FourSides"}) foreach(bool siege in new[]{false,true}) foreach(bool hero in new[]{false,true}) {
+                var supportGame=new FakeGame{SiegeAvailable=siege,HeroAvailable=hero};
+                var supportSettings=new Settings{Platform="GooglePlayGames",DeploymentMode=mode};
+                var supportRunner=new Runner(supportGame,supportSettings,2,false,logs.Add,new Random(5));supportRunner.Start(now);
+                for(int t=0;t<20000 && supportRunner.Active;t++){supportGame.Now=now.AddMilliseconds(t*50);supportRunner.Tick(supportGame.Now);}
+                Assert(supportRunner.Completed==2 && supportGame.Deployments==50 && supportGame.SpellCasts==22,"support preserves troop, spell and battle counts");
+                Assert(supportGame.SiegeDeployments==(siege?2:0) && supportGame.HeroDeployments==(hero?8:0),"siege and each of four heroes deploy once per battle");
+                var sequence=new List<Keys>();for(int b=0;b<2;b++){if(hero)sequence.AddRange(new[]{Keys.Q,Keys.W,Keys.E,Keys.R});if(siege)sequence.Add(Keys.Z);sequence.Add(Keys.D1);if(hero)sequence.AddRange(new[]{Keys.Q,Keys.W,Keys.E,Keys.R});sequence.Add(Keys.A);}
+                Assert(supportGame.SelectionKeys.SequenceEqual(sequence),"heroes then siege then settled army then abilities then spells");
+                if(hero) {
+                    var sides=Plan.Sides(supportSettings,false);
+                    int offset=0;
+                    for(int b=0;b<2;b++)for(int i=0;i<4;i++) {
+                        Vec point=supportGame.SupportPoints[b*(siege?5:4)+offset+i];
+                        if(mode=="FourSides")Assert(Math.Abs(point.X-(sides[i].A.X+sides[i].B.X)/2)<1e-10 && Math.Abs(point.Y-(sides[i].A.Y+sides[i].B.Y)/2)<1e-10,"one hero per four-side path");
+                        if(mode=="LShape" && i%2==1) {Vec previous=supportGame.SupportPoints[b*(siege?5:4)+offset+i-1];Assert(point.X==previous.X && point.Y==previous.Y,"two heroes share each L side");}
+                    }
+                }
+                foreach(Vec point in supportGame.SupportPoints) Assert(Plan.Sides(supportSettings,false).Concat(Plan.Sides(supportSettings,true)).Any(side=>Math.Abs(point.X-(side.A.X+side.B.X)/2)<1e-10 && Math.Abs(point.Y-(side.A.Y+side.B.Y)/2)<1e-10),"support stays at a troop-side midpoint");
+            }
+            foreach(string platform in new[]{"GooglePlayGames","BlueStacks"}) {
+                var disabledGame=new FakeGame{SiegeAvailable=true,HeroAvailable=true};
+                var disabledRunner=new Runner(disabledGame,new Settings{Platform=platform,DeploySiegeAndFirstHero=false},1,false,logs.Add,new Random(3));disabledRunner.Start(now);
+                for(int t=0;t<10000 && disabledRunner.Active;t++){disabledGame.Now=now.AddMilliseconds(t*50);disabledRunner.Tick(disabledGame.Now);}
+                Assert(disabledRunner.Completed==1 && disabledGame.SupportPoints.Count==0,"support toggle off preserves original flow");
+            }
+            foreach(bool afterSelection in new[]{false,true}) {
+                var stoppedGame=new FakeGame{SiegeAvailable=true,HeroAvailable=true};var stoppedRunner=new Runner(stoppedGame,new Settings{Platform="GooglePlayGames"},1,false,logs.Add,new Random(3));stoppedRunner.Start(now);
+                for(int t=0;t<10000 && stoppedRunner.Active;t++){stoppedGame.Now=now.AddMilliseconds(t*50);stoppedRunner.Tick(stoppedGame.Now);if(stoppedRunner.State==(afterSelection?"Deploy hero":"Deploy siege"))break;}
+                int clicks=stoppedGame.SupportPoints.Count;stoppedRunner.Stop("Stop before support placement");stoppedRunner.Tick(now.AddHours(1));Assert(stoppedGame.SupportPoints.Count==clicks,"Stop cancels queued support placement");
+            }
+            foreach(string ending in new[]{"stop","natural","cutoff"}) {
+                var abilityGame=new FakeGame{HeroAvailable=true,SiegeAvailable=true};
+                var abilityRunner=new Runner(abilityGame,new Settings{Platform="GooglePlayGames",AttackDurationSeconds=60},1,false,logs.Add,new Random(6));abilityRunner.Start(now);
+                int tick=0;while(abilityRunner.Active && abilityRunner.State!="Hero ability" && tick<10000){abilityGame.Now=now.AddMilliseconds(tick++*50);abilityRunner.Tick(abilityGame.Now);}
+                Assert(abilityRunner.State=="Hero ability" && abilityGame.Deployments==25,"abilities wait until full troop deployment");
+                int selected=abilityGame.SelectionKeys.Count;
+                if(ending=="stop")abilityRunner.Stop("Stop before delayed abilities");
+                if(ending=="natural")abilityGame.Screen="result";
+                DateTime endTime=ending=="cutoff"?abilityGame.TroopStarts[0].AddMinutes(2):abilityGame.Now.AddSeconds(1);
+                abilityGame.Now=endTime;abilityRunner.Tick(endTime);
+                Assert(abilityGame.SelectionKeys.Count==selected,"Stop, natural completion and cutoff prevent pending abilities");
+            }
+            var shortGame=new FakeGame{HeroAvailable=true,SiegeAvailable=true,TroopsPerBattle=500};
+            var shortRunner=new Runner(shortGame,new Settings{Platform="GooglePlayGames",Troops=500,AttackDurationSeconds=3},1,false,logs.Add,new Random(7));shortRunner.Start(now);
+            for(int t=0;t<20000 && shortRunner.Active;t++){shortGame.Now=now.AddMilliseconds(t*50);shortRunner.Tick(shortGame.Now);}
+            Assert(shortRunner.Completed==1 && shortGame.Deployments>0 && shortGame.Deployments<500 && shortGame.SpellCasts==0,"short first-troop deadline cancels unfinished army and spells");
+            Assert(shortGame.SelectionKeys.Count(k=>k==Keys.Q)==1 && (shortGame.EndedAt-shortGame.TroopStarts[0]).TotalSeconds<=8.1,"cutoff does not activate queued hero abilities or count support deployment time");
+            var noSpellSupport=new FakeGame{HeroAvailable=true,SiegeAvailable=true,SpellsRequired=false,LongBattle=true};
+            var noSpellRunner=new Runner(noSpellSupport,new Settings{Platform="GooglePlayGames",Spells=0},1,false,logs.Add,new Random(4));noSpellRunner.Start(now);
+            for(int t=0;t<10000 && noSpellRunner.Active;t++){noSpellSupport.Now=now.AddMilliseconds(t*50);noSpellRunner.Tick(noSpellSupport.Now);}
+            Assert(noSpellRunner.Completed==1 && noSpellSupport.SelectionKeys.Count(k=>k==Keys.Q)==2 && !noSpellSupport.SelectionKeys.Contains(Keys.A),"abilities still fire after army when spells are disabled");
+            foreach(string invalid in new[]{"{\"DeploymentMode\":\"unknown\"}","{\"Spells\":-1}","{\"Spells\":101}"}) {
+                bool invalidRejected=false;try {Settings.FromJson(invalid);}catch {invalidRejected=true;}Assert(invalidRejected,"invalid new settings rejected");
+            }
+            foreach(bool naturalEnd in new[]{false,true}) {
+                var burstGame=new FakeGame{SpellsPerBattle=100};
+                var burstRunner=new Runner(burstGame,new Settings{DeploymentMode="FourSides",Spells=100},1,false,logs.Add,new Random(7));burstRunner.Start(now);
+                int tick=0;
+                while(burstRunner.Active && burstGame.SpellCasts<6 && tick<10000) {burstGame.Now=now.AddMilliseconds(tick++*50);burstRunner.Tick(burstGame.Now);}
+                Assert(burstGame.SpellCasts==6,"four-side burst begins");
+                if(naturalEnd) burstGame.Screen="result";else burstRunner.Stop("Stop during four-side burst");
+                for(int t=tick;t<tick+200 && (naturalEnd?burstRunner.Active:true);t++) {burstGame.Now=now.AddMilliseconds(t*50);burstRunner.Tick(burstGame.Now);}
+                Assert(burstGame.SpellCasts==6 && (naturalEnd?burstRunner.Completed==1:burstGame.ReturnClicks==0),"natural completion and Stop cancel remaining four-side casts");
+            }
+            foreach(string mode in new[]{"LShape","FourSides"}) foreach(int total in new[]{0,1,2,3,4,5,6,7,11,12,15,100}) {
+                var configurable=new Settings{DeploymentMode=mode,Spells=total,Platform="GooglePlayGames",EndBattleEarly=false};
+                var layout=Plan.Opening(configurable,false,new Random(4));
+                int opening=mode=="FourSides" || total<=6?total:(total+1)/2;
+                Assert(layout.Points.Count==opening && layout.Counts.Max()-layout.Counts.Min()<=1,"balanced variable opening spell groups");
+                Assert(layout.Points.All(p=>p.Y>=.05 && p.Y<=.835),"variable spells avoid troop bar");
+                var spellGame=new FakeGame{SpellsPerBattle=Math.Max(1,total),SpellsRequired=total>0};
+                var spellRunner=new Runner(spellGame,configurable,1,false,logs.Add,new Random(4));spellRunner.Start(now);
+                for(int t=0;t<20000 && spellRunner.Active;t++) {spellGame.Now=now.AddMilliseconds(t*50);spellRunner.Tick(spellGame.Now);}
+                Assert(spellRunner.Completed==1 && spellGame.SpellCasts==total,"exact configured spell casts and completed battle");
+                Assert(spellGame.SelectionKeys.Count(k=>k==Keys.A)==(total==0?0:1),"zero spells skip selection");
+                for(int i=1;i<total;i++) {
+                    double ms=(spellGame.SpellTimes[i]-spellGame.SpellTimes[i-1]).TotalMilliseconds;
+                    Assert(i<opening?ms<=150:i==opening?ms>=5000 && ms<=10050:ms>=2000 && ms<=5050,"mode-specific burst and delayed timing");
+                }
+                int sent=spellGame.SpellCasts;spellRunner.Tick(now.AddHours(1));Assert(spellGame.SpellCasts==sent,"finished variable run sends no extra spells");
+            }
             foreach(int duration in new[]{3,60,180}) {
                 var timedGame=new FakeGame{LongBattle=true};var timedSettings=new Settings{AttackDurationSeconds=duration};
                 var timedRunner=new Runner(timedGame,timedSettings,1,false,logs.Add,new Random(2));timedRunner.Start(now);
                 for(int t=0;t<5000 && timedRunner.Active;t++){timedGame.Now=now.AddMilliseconds(t*100);timedRunner.Tick(timedGame.Now);}
-                double elapsed=(timedGame.EndedAt-timedGame.TroopsDone).TotalSeconds;
+                double elapsed=(timedGame.EndedAt-timedGame.TroopStarts[0]).TotalSeconds;
                 Assert(timedRunner.Completed==1 && timedGame.EndClicks==1 && timedGame.ConfirmClicks==1,"configured duration ends the battle through its confirmation");
                 Assert(elapsed>=Math.Max(3,duration-5) && elapsed<=Math.Min(180,duration+5)+1,"duration jitter is bounded and does not wait for the final spell");
                 if(duration==3)Assert(timedGame.SpellCasts<11,"short timer cancels pending late spells");
@@ -129,8 +246,8 @@ namespace ClashPekkas {
                 game=new FakeGame{LongBattle=true,NoStar=noStar};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
                 for(int t=0;t<3000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
                 Assert(runner.Completed==1 && game.EndClicks==1 && game.ConfirmClicks==1,"timed exit handles both End Battle and Surrender confirmations");
-                double elapsed=(game.EndedAt-game.TroopsDone).TotalSeconds;
-                Assert(elapsed>=80 && elapsed<=103,"cutoff is measured from full troop deployment with bounded polling overhead");
+                double elapsed=(game.EndedAt-game.TroopStarts[0]).TotalSeconds;
+                Assert(elapsed>=85 && elapsed<=98,"cutoff is measured from the first troop deployment with bounded polling overhead");
             }
             game=new FakeGame{LongBattle=true,NoStar=true,UnknownDialog=true};runner=new Runner(game,new Settings(),1,false,logs.Add,new Random(3));runner.Start(now);
             for(int t=0;t<3000 && runner.Active;t++) { game.Now=now.AddMilliseconds(t*100);runner.Tick(game.Now); }
@@ -246,7 +363,8 @@ namespace ClashPekkas {
             Rectangle googleView=Native.FitGameArea(Rectangle.Intersect(googlePane,googleClient));
             Assert(googleClient.Contains(googleView) && googleView.X>=106 && googleView.Y>=36 && Math.Abs((double)googleView.Width/googleView.Height-16.0/9)<.002,"clipped Google game area excludes title, sidebar and desktop gaps");
             Assert(!Native.IsGoogleGameArea(new Rectangle(106,36,2425,1356),googleClient) && !Native.IsGoogleGameArea(googleClient,googleClient),"large offscreen overflow and whole-window candidates are rejected");
-            Assert(!AdbClient.Enabled(new Settings{Platform="GooglePlayGames"}),"Google selection never uses the BlueStacks ADB connection");
+            Assert(AdbClient.Enabled(new Settings{Platform="GooglePlayGames",UseAdbWhenAvailable=false}),"Google Developer always uses ADB without desktop fallback");
+            Assert(AdbClient.ValidSerial("localhost:6520") && !AdbClient.ValidSerial("localhost.example.com:6520"),"Google loopback alias accepted without remote hosts");
             var oldGeometry=new Settings{GeometryVersion=2,Normal=Settings.PreviousOuterLines(false),Reverse=Settings.PreviousOuterLines(true),AttackDurationSeconds=30};
             var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
             var previousConfig=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(oldGeometry));
@@ -268,9 +386,26 @@ namespace ClashPekkas {
             tileEdge.Reverse[2].X=.87;
             var customGrass=Settings.FromJson(serializer.Serialize(tileEdge));
             Assert(customGrass.Reverse[2].X==.87 && customGrass.Reverse[3].X==.6104,"custom lower-right paths are preserved");
-            foreach(bool orientation in new[]{false,true}) {
-                var before=Plan.OpeningSpells(oldGeometry,orientation,new Random(6));var after=Plan.OpeningSpells(adjusted,orientation,new Random(6));
-                Assert(before.Zip(after,(a,b)=>a.X==b.X && a.Y==b.Y).All(v=>v),"deployment correction preserves opening spell locations");
+            var legacyDepth=Settings.FromJson("{\"OpeningSpellInward\":0.6,\"Battles\":7,\"Spells\":15}");
+            Assert(legacyDepth.LShapeOpeningDepthPercent==0 && legacyDepth.LShapeLaterDepthPercent==70 && legacyDepth.FourSidesSpellDepthPercent==0 && legacyDepth.Battles==7 && legacyDepth.Spells==15,"legacy depth defaults preserve run settings");
+            foreach(string mode in new[]{"LShape","FourSides"}) foreach(bool orientation in new[]{false,true}) foreach(int depth in new[]{0,10,70,100}) {
+                var depthSettings=new Settings{DeploymentMode=mode,LShapeOpeningDepthPercent=depth,LShapeLaterDepthPercent=depth,FourSidesSpellDepthPercent=depth};
+                depthSettings.Normal[0].X-=.01; // Custom paths must be the source, too.
+                for(int seed=0;seed<30;seed++) {
+                    var opening=Plan.Opening(depthSettings,orientation,new Random(seed));
+                    for(int i=0;i<opening.Points.Count;i++) Assert(OnDepth(opening.Points[i],opening.Sides[opening.PointSides[i]],depth),"opening spells use exact selected depth on actual paths");
+                    if(mode=="LShape") {
+                        var later=Plan.LaterSpell(depthSettings,orientation,20,new Random(seed));
+                        Assert(Plan.Sides(depthSettings,orientation).Any(side=>OnDepth(later,side,depth)),"later spells use exact depth without radial jitter");
+                    }
+                }
+                var before=Plan.OpeningSpells(depthSettings,orientation,new Random(6));
+                depthSettings.NormalSpellGuide=null;depthSettings.ReverseSpellGuide=null;depthSettings.OpeningSpellInward=-1;
+                var after=Plan.OpeningSpells(depthSettings,orientation,new Random(6));
+                Assert(before.Zip(after,(a,b)=>a.X==b.X && a.Y==b.Y).All(v=>v),"retired spell settings no longer affect placement");
+            }
+            foreach(string field in new[]{"LShapeOpeningDepthPercent","LShapeLaterDepthPercent","FourSidesSpellDepthPercent"}) foreach(int invalidDepth in new[]{-1,101}) {
+                bool failed=false;try{Settings.FromJson("{\""+field+"\":"+invalidDepth+"}");}catch{failed=true;}Assert(failed,"out of range depth rejected");
             }
             var rng=new Random(6);
             for(int k=0;k<1000;k++) foreach(bool reverse in new[]{false,true}) {
@@ -285,13 +420,10 @@ namespace ClashPekkas {
                 Assert(opening.Count==6,"three opening spells per arm");
                 Assert(opening.Take(3).Average(p=>p.Y)<opening.Skip(3).Average(p=>p.Y),"first three and second three cover separate entry flanks");
                 for(int arm=0;arm<2;arm++) {
-                    Vec[] guides=reverse?settings.ReverseSpellGuide:settings.NormalSpellGuide;
-                    double bx=(guides[arm*2].X+guides[arm*2+1].X)/2-.5,by=(guides[arm*2].Y+guides[arm*2+1].Y)/2-.45;
-                    double sx=opening.Skip(arm*3).Take(3).Average(p=>p.X)-.5,sy=opening.Skip(arm*3).Take(3).Average(p=>p.Y)-.45;
-                    double ratio=Math.Sqrt((sx*sx+sy*sy)/(bx*bx+by*by));
-                    Assert(ratio>.53 && ratio<.73,"opening spell paths are roughly 6-7 tiles out for a 10-tile deployment radius");
+                    DeploymentSide side=Plan.Sides(settings,reverse)[arm];
+                    foreach(Vec p in opening.Skip(arm*3).Take(3)) Assert(OnDepth(p,side,0),"default opening spells lie on troop paths");
                 }
-                foreach(Vec spell in opening) Assert(spell.Y>=.14 && spell.Y<=.74 && (reverse ? spell.X>=.52 : spell.X<=.48),"opening spells stay on the chosen half and avoid HUD");
+                foreach(Vec spell in opening) Assert(spell.Y>=.05 && spell.Y<=.835,"opening spells stay above troop bar");
                 foreach(double seconds in new[]{0.0,15.0,40.0,90.0,180.0}) {
                     Vec spell=Plan.LaterSpell(settings,reverse,seconds,rng);
                     Assert(spell.Y>=.14 && spell.Y<=.74 && (reverse ? spell.X>=.52 && spell.X<=.92 : spell.X>=.08 && spell.X<=.48),"later spell target stays in the attacked half");

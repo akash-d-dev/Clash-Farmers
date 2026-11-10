@@ -32,6 +32,23 @@ foreach($case in $cases) {
     }finally{$image.Dispose()}
 }
 $source=[Drawing.Bitmap]::new((Join-Path $FixtureDirectory 'edge-filled-base.png'))
+$developer=[Drawing.Bitmap]::new((Join-Path $FixtureDirectory 'developer-battle.png'))
+try {
+    if($null -eq $reader.Find($developer,'retreat')){throw 'Developer Edition End Battle button must be found in its lower position.'}
+    $loot=$reader.ReadLoot($developer,$true,$true,$true,$true,$true)
+    if($null -eq $loot -or $loot.Gold -ne 701370 -or $loot.Elixir -ne 695900 -or $loot.DarkElixir -ne 6758){throw 'Developer Edition loot must use its Android screenshot coordinates.'}
+    'PASS: Developer Android End Battle and all three loot values recognized.'
+}finally{$developer.Dispose()}
 $field=[Drawing.Bitmap]::new(2404,1352);$g=[Drawing.Graphics]::FromImage($field)
 try{$g.DrawImageUnscaled($source,0,-32);$image=[ClashPekkas.Vision]::Resize($field,1600,900)}finally{$source.Dispose();$g.Dispose();$field.Dispose()}
-try{[ClashPekkas.Vision]::DrawPlan($image,[ClashPekkas.Settings]::new());$image.Save((Join-Path $TestOutputDirectory 'outer-strip-preview.png'),[Drawing.Imaging.ImageFormat]::Png)}finally{$image.Dispose()}
+try{
+    foreach($mode in @('LShape','FourSides')) {
+        $preview=$image.Clone()
+        try {
+            $settings=[ClashPekkas.Settings]::new();$settings.DeploymentMode=$mode
+            [ClashPekkas.Vision]::DrawPlan($preview,$settings)
+            $name=if($mode -eq 'LShape'){'outer-strip-preview.png'}else{'four-sides-preview.png'}
+            $preview.Save((Join-Path $TestOutputDirectory $name),[Drawing.Imaging.ImageFormat]::Png)
+        }finally{$preview.Dispose()}
+    }
+}finally{$image.Dispose()}

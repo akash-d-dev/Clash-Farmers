@@ -66,21 +66,68 @@ try {
     $count.Value=30
     if ($start.Text -ne 'Start 30 battles') { throw 'Thirty-battle Start label is incorrect.' }
     $troops=$form.Controls.Find('troopCount',$true)[0]
+    $spells=$form.Controls.Find('spellCount',$true)[0]
+    $deployment=$form.Controls.Find('deploymentSelector',$true)[0]
+    if($spells.Minimum -ne 0 -or $spells.Maximum -ne 100 -or $deployment.Items.Count -ne 2){throw 'New deployment controls have incorrect options.'}
+    $spells.Value=15;$deployment.SelectedIndex=1
+    $supportToggle=$form.Controls.Find('supportUnits',$true)[0]
+    if($supportToggle.Enabled){throw 'Support toggle should be disabled for BlueStacks.'}
+    $form.Controls.Find('platformSelector',$true)[0].SelectedIndex=1
+    if(-not $supportToggle.Enabled){throw 'Support toggle should enable for Google.'}
+    $supportToggle.Checked=$false;$supportToggle.Checked=$true
+    $openingDepth=$form.Controls.Find('openingDepth',$true)[0]
+    $laterDepth=$form.Controls.Find('laterDepth',$true)[0]
+    $fourDepth=$form.Controls.Find('fourSidesDepth',$true)[0]
+    foreach($input in @($openingDepth,$laterDepth,$fourDepth)){if($input.Minimum -ne 0 -or $input.Maximum -ne 100 -or $input.Increment -ne 5){throw 'Incorrect depth bounds or increment.'}}
+    $openingDepth.Value=10;$laterDepth.Value=70;$fourDepth.Value=20
+    $deployment.SelectedIndex=0;$deployment.SelectedIndex=1
     $duration=$form.Controls.Find('durationSeconds',$true)[0]
     $gold=$form.Controls.Find('goldMinimum',$true)[0]
     $elixir=$form.Controls.Find('elixirMinimum',$true)[0]
     $dark=$form.Controls.Find('darkMinimum',$true)[0]
     $troops.Value=500;$duration.Value=3;$gold.Value=0;$elixir.Value=0;$dark.Value=100
     $saved=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText((Join-Path $testFolder 'data\settings.json')))
+    if($saved.Spells -ne 15 -or $saved.DeploymentMode -ne 'FourSides'){throw 'Deployment mode and spell count were not saved.'}
+    if(-not $saved.DeploySiegeAndFirstHero){throw 'Support preference must save.'}
+    if($saved.LShapeOpeningDepthPercent -ne 10 -or $saved.LShapeLaterDepthPercent -ne 70 -or $saved.FourSidesSpellDepthPercent -ne 20){throw 'Independent depth values were not preserved.'}
     if($saved.Troops -ne 500 -or $saved.AttackDurationSeconds -ne 3 -or $saved.MinGold -ne 0 -or $saved.MinElixir -ne 0 -or $saved.MinDarkElixir -ne 100){throw 'Configurable inputs were not saved.'}
     $form.Show()
     [Windows.Forms.Application]::DoEvents()
+    if(-not $fourDepth.Visible -or $openingDepth.Visible -or $laterDepth.Visible){throw 'Four-side depth visibility is incorrect.'}
+    $deployment.SelectedIndex=0
+    if($fourDepth.Visible -or -not $openingDepth.Visible -or -not $laterDepth.Visible){throw 'L-shaped depth visibility is incorrect.'}
+    $spells.Value=0
+    if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'Zero spells must disable depth controls.'}
+    $spells.Value=1
+    if(-not $openingDepth.Enabled -or $laterDepth.Enabled){throw 'One spell must disable later depth only.'}
+    $spells.Value=6
+    if(-not $openingDepth.Enabled -or $laterDepth.Enabled){throw 'Six spells must use opening depth only.'}
+    $spells.Value=7
+    if(-not $laterDepth.Enabled){throw 'Seven spells must enable later depth.'}
+    $spells.Value=15
+    if(-not $laterDepth.Enabled){throw 'Later depth must enable when a later batch exists.'}
+    $disabled=Get-Content -LiteralPath (Join-Path $testFolder 'data\settings.json') -Raw | ConvertFrom-Json
+    $disabled.UseSpells=$false
+    $disabled | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $testFolder 'data\settings.json')
+    $spells.Value=14
+    if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'UseSpells=false must disable all depth controls.'}
+    $disabled.UseSpells=$true
+    $disabled | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $testFolder 'data\settings.json')
+    $spells.Value=15
+    $form.DrawToBitmap($render,[Drawing.Rectangle]::new(0,0,$form.Width,$form.Height))
+    $render.Save("$TestOutputDirectory\app-depth-lshape.png",[Drawing.Imaging.ImageFormat]::Png)
+    $deployment.SelectedIndex=1
     $start.PerformClick()
-    if (-not $form.IsBusy -or -not $stop.Enabled -or $start.Enabled -or $script:activations -ne 1) { throw 'Countdown must enable Stop, disable Start, and activate the selected player once.' }
+    if (-not $form.IsBusy -or -not $stop.Enabled -or $start.Enabled -or $script:activations -ne 0) { throw 'Google ADB countdown must enable Stop without activating a desktop window.' }
     if ($form.Text -ne 'Starting | 30 left (0/30) - Clash Farmer') { throw 'Countdown title is incorrect.' }
     if($troops.Enabled -or $duration.Enabled -or $gold.Enabled -or $elixir.Enabled -or $dark.Enabled){throw 'Run settings must be locked during countdown.'}
+    if($spells.Enabled -or $deployment.Enabled){throw 'Spell and deployment settings must be locked during countdown.'}
+    if($supportToggle.Enabled){throw 'Support toggle must lock while running.'}
+    if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'Depth controls must lock during countdown.'}
     $stop.PerformClick()
     if ($form.IsBusy -or $stop.Enabled -or -not $start.Enabled) { throw 'Stopping must immediately restore idle controls.' }
+    if(-not $spells.Enabled -or -not $deployment.Enabled){throw 'New settings must unlock after Stop.'}
+    if(-not $fourDepth.Enabled){throw 'Visible depth control must unlock after Stop.'}
     if ($form.Text -ne 'Stopped | 30 left (0/30) - Clash Farmer') { throw 'Cancelled title must retain the remaining count.' }
     $activity = $form.Controls.Find('activityLog',$true)[0]
     $length = $activity.TextLength
@@ -88,7 +135,7 @@ try {
     if ($activity.TextLength -ne $length) { throw 'Disabled Stop must not log repeated stop messages.' }
     $start.PerformClick()
     $stop.PerformClick()
-    if ($script:activations -ne 2 -or $form.IsBusy -or $stop.Enabled) { throw 'Restart after cancellation failed.' }
+    if ($script:activations -ne 0 -or $form.IsBusy -or $stop.Enabled) { throw 'Background restart must not activate a desktop window.' }
     $private=[Reflection.BindingFlags]'Instance,NonPublic'
     $fake=[ClashPekkas.Runner]::new($null,$saved,30,$false,[Action[string]]{param($line)},[Random]::new(1))
     $fake.Start([DateTime]::Now)

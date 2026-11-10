@@ -16,6 +16,8 @@ public static class FakeAdb {
             byte[] png=File.ReadAllBytes(Path.Combine(root,"frame.png"));
             using(Stream output=Console.OpenStandardOutput()) output.Write(png,0,png.Length);
         } else if(command.EndsWith("get-state")) Console.WriteLine("device");
+        else if(command=="devices") Console.WriteLine("List of devices attached\r\n127.0.0.1:6520 device product:kiwi_x86_64_dev");
+        else if(command.Contains("dumpsys window")) Console.WriteLine("mCurrentFocus=Window{test u0 com.supercell.clashofclans/com.supercell.titan.GameApp}");
     }
 }
 '@
@@ -30,6 +32,20 @@ try {
     $client.Tap(107,854)
     $calls=Get-Content -LiteralPath (Join-Path $testDir 'calls.txt')
     if($calls.Count -ne 2 -or $calls[0] -ne '-s 127.0.0.1:5555 exec-out screencap -p' -or $calls[1] -ne '-s 127.0.0.1:5555 shell input tap 107 854'){throw 'Android commands were incorrectly targeted.'}
+    $settings=[ClashPekkas.Settings]::new();$settings.Platform='GooglePlayGames';$settings.UseAdbWhenAvailable=$false;$settings.GoogleAdbPath=$fakeExe
+    $reader=[ClashPekkas.OcrReader]{param([byte[]]$png) '[]'}
+    $game=[ClashPekkas.AndroidGame]::new([IntPtr]::Zero,$settings,$reader,(Join-Path $AssetDirectory 'pekka-face.png'),[Action[string]]{param($line)})
+    try {
+        $capture=$game.Capture();$capture.Dispose()
+        $game.Click([ClashPekkas.Vec]::new(.5,.5))
+        foreach($key in @('D1','A','Z','Q','W','E','R')){$game.PressKey([Windows.Forms.Keys]::$key)}
+        if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Z)){throw 'Android siege selection must use ADB.'}
+        if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Q)){throw 'Android hero selection must use ADB.'}
+    }finally{$game.Dispose()}
+    $calls=Get-Content -LiteralPath (Join-Path $testDir 'calls.txt')
+    foreach($code in @(8,29,54,45,51,33,46)){if($calls -notcontains "-s 127.0.0.1:6520 shell input keyevent $code"){throw "Missing Android key event $code"}}
+    if($calls -notcontains '-s 127.0.0.1:6520 shell input tap 800 450'){throw 'Google taps must scale to the Android screenshot, not Windows coordinates.'}
+    if($calls -match '^connect '){throw 'An online loopback alias must be reused without reconnecting.'}
     'PASS: Android screenshot bytes decode correctly and taps target the specified local emulator. Uses a fake ADB executable; no game input, network connection, desktop focus, or mouse input was used.'
 } finally {
     foreach($name in @('FakeAdb.exe','FakeAdb.pdb','frame.png','calls.txt')) { Remove-Item -LiteralPath (Join-Path $testDir $name) -ErrorAction SilentlyContinue }
