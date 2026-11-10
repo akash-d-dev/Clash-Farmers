@@ -6,10 +6,11 @@ using System.Windows.Forms;
 namespace ClashPekkas {
     public sealed class FakeGame : IGame,ISupportGame {
         public bool SiegeAvailable,HeroAvailable;public int SiegeDeployments,HeroDeployments;
+        public bool FlexibleActions;
         public readonly List<Vec> SupportPoints=new List<Vec>();
         public bool TrySelectSupport(Keys key) {
             Guard();if(!(key==Keys.Z?SiegeAvailable:HeroAvailable))return false;
-            if(Screen!="scout")throw new Exception("Support selected on wrong screen");
+            if(Screen!="scout" && !(FlexibleActions && (Screen=="battle" || Screen=="fighting")))throw new Exception("Support selected on wrong screen");
             SelectionKeys.Add(key);Screen=key==Keys.Z?"supportSiege":"supportHero";return true;
         }
         public string Screen="home"; public int Deployments,Selections,SpellSelections,SpellCasts,HomeClicks,FindClicks,ArmyClicks,ReturnClicks;
@@ -47,26 +48,26 @@ namespace ClashPekkas {
         public bool SpellVisible() { SpellCardChecks++;return !WrongSpell; }
         public void PressKey(Keys key) {
             Guard();if(RejectKey) throw new Exception("selection input failed");
-            if((Screen=="battle" || Screen=="fighting") && HeroAvailable && new[]{Keys.Q,Keys.W,Keys.E,Keys.R}.Contains(key)){if(Deployments%TroopsPerBattle!=0 || Now<TroopsDone.AddMilliseconds(350))throw new Exception("Ability before army finished settling");SelectionKeys.Add(key);return;}
-            if(key==Keys.D1 && Screen=="scout") {if(SelectionDelayMs>0)System.Threading.Thread.Sleep(SelectionDelayMs);TroopSelectedAt=Now.AddMilliseconds(SelectionDelayMs);KeySelection=true;Selections++;Screen="deploy";}
-            else if(key==Keys.A && Screen=="battle") {SpellSelectedAt=Now;SpellSelections++;Screen="spells";}
+            if((Screen=="battle" || Screen=="fighting") && HeroAvailable && new[]{Keys.Q,Keys.W,Keys.E,Keys.R}.Contains(key)){if(!FlexibleActions && (Deployments%TroopsPerBattle!=0 || Now<TroopsDone.AddMilliseconds(350)))throw new Exception("Ability before army finished settling");SelectionKeys.Add(key);return;}
+            if(key==Keys.D1 && (Screen=="scout" || FlexibleActions && (Screen=="battle" || Screen=="fighting"))) {if(SelectionDelayMs>0)System.Threading.Thread.Sleep(SelectionDelayMs);TroopSelectedAt=Now.AddMilliseconds(SelectionDelayMs);KeySelection=true;Selections++;Screen="deploy";}
+            else if(key==Keys.A && (Screen=="battle" || FlexibleActions && (Screen=="scout" || Screen=="fighting"))) {SpellSelectedAt=Now;SpellSelections++;Screen="spells";}
             else throw new Exception("Unexpected selection key or screen");
             SelectionKeys.Add(key);
         }
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { LootReads++;if(TransientLoot.Count>0) return TransientLoot.Dequeue();return UnreadableFirst && NextClicks==0 ? null : Opponents[Math.Min(NextClicks,Opponents.Count-1)]; }
         public void Click(Vec p) {
             Guard();
-            if(Screen=="supportSiege" || Screen=="supportHero") {if(Screen=="supportSiege")SiegeDeployments++;else HeroDeployments++;SupportPoints.Add(p);Screen="scout";}
+            if(Screen=="supportSiege" || Screen=="supportHero") {if(Screen=="supportSiege")SiegeDeployments++;else HeroDeployments++;SupportPoints.Add(p);Screen=FlexibleActions?"battle":"scout";}
             else if(Screen=="home") { if(StrictNavigation && (p.X>.2 || p.Y<.82)) throw new Exception("Wrong home coordinate");HomeClicks++;Screen="find"; }
             else if((Screen=="army" && p.X>.94 && p.Y<.15) || (Screen=="find" && p.X>.65 && p.X<.75 && p.Y>.8 && p.Y<.85)) { PanelCloses++;Screen="home"; }
             else if(Screen=="find") { if(DropFindOnce) { DropFindOnce=false;return; } if(p.X>.78 && p.Y>.82) return; if(StrictNavigation && (p.X>.3 || p.Y<.65 || p.Y>.82)) throw new Exception("Wrong match coordinate");FindClicks++;Screen="army"; }
             else if(Screen=="army") { if(DropArmyOnce) { DropArmyOnce=false;return; } if(StrictNavigation && (p.X<.78 || p.Y<.82)) throw new Exception("Wrong army coordinate");ArmyClicks++;Screen="scout"; }
             else if(Screen=="scout") { if(ScoutWithoutNext && p.X<.2 && p.Y<.85) { ExpiredSearches++;ScoutWithoutNext=false;Screen="home"; } else if(p.X>.8 && p.Y<.85) { NextClicks++; } else { Selections++;Screen="deploy"; } }
             else if(Screen=="deploy" && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
-            else if(Screen=="deploy") { TroopStarts.Add(Now);if(TroopClickDelayMs>0)System.Threading.Thread.Sleep(TroopClickDelayMs);Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now.AddMilliseconds(TroopClickDelayMs);Screen=SpellsRequired && (!WrongSpell || KeySelection)?"battle":LongBattle?"fighting":"result"; } }
+            else if(Screen=="deploy") { TroopStarts.Add(Now);if(TroopClickDelayMs>0)System.Threading.Thread.Sleep(TroopClickDelayMs);Deployments++;if(Deployments%TroopsPerBattle==0) { TroopsDone=Now.AddMilliseconds(TroopClickDelayMs);Screen=FlexibleActions?"battle":SpellsRequired && (!WrongSpell || KeySelection)?"battle":LongBattle?"fighting":"result"; } }
             else if((Screen=="battle" || Screen=="spells") && p.X<.2 && p.Y>.74) {EndClicks++;EndedAt=Now;Screen="confirm";}
             else if(Screen=="battle") { if(p.Y<.85) throw new Exception("Expected spell card selection");SpellSelections++;Screen="spells"; }
-            else if(Screen=="spells") { if(p.Y>=.835) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%SpellsPerBattle==0) Screen=LongBattle?"fighting":"result"; }
+            else if(Screen=="spells") { if(p.Y>=.835) throw new Exception("Spell cast on HUD");SpellCasts++;SpellTimes.Add(Now);SpellPoints.Add(p);if(SpellCasts%SpellsPerBattle==0) Screen=FlexibleActions?"battle":LongBattle?"fighting":"result"; }
             else if(Screen=="fighting") { EndClicks++;EndedAt=Now;Screen="confirm"; }
             else if(Screen=="confirm") { ConfirmClicks++;Screen="result"; }
             else if(Screen=="result") { ReturnClicks++;Screen="home"; }
@@ -75,6 +76,10 @@ namespace ClashPekkas {
     }
     public static class Tests {
         static void Assert(bool ok,string name) { if(!ok) throw new Exception("TEST FAILED: "+name); }
+        static IEnumerable<string[]> Orders(string[] remaining) {
+            if(remaining.Length==0){yield return new string[0];yield break;}
+            for(int i=0;i<remaining.Length;i++)foreach(string[] tail in Orders(remaining.Where((value,index)=>index!=i).ToArray()))yield return new[]{remaining[i]}.Concat(tail).ToArray();
+        }
         static bool OnDepth(Vec point,DeploymentSide side,int depth) {
             double d=depth/100.0;
             if(depth==100)return Math.Abs(point.X-.5)<1e-10 && Math.Abs(point.Y-.45)<1e-10;
@@ -117,6 +122,34 @@ namespace ClashPekkas {
                 Assert((latencyGame.SpellSelectedAt-latencyGame.TroopsDone).TotalMilliseconds>=350,"final mouse release settles before spell selection");
             }
             Assert(Settings.FromJson("{}").DeploymentMode=="LShape" && Settings.FromJson("{}").Spells==11,"legacy settings default to L and eleven spells");
+            int validOrders=0;
+            foreach(string[] order in Orders(new Settings().ActionOrder)) {
+                bool valid=Array.IndexOf(order,"Heroes")<Array.IndexOf(order,"HeroAbilities"),accepted=true;
+                try{Settings.ValidateOrder(order);}catch{accepted=false;}Assert(valid==accepted,"only hero-before-ability permutations are valid");if(!valid)continue;validOrders++;
+                foreach(string mode in new[]{"LShape","FourSides"}) {
+                    var orderedGame=new FakeGame{FlexibleActions=true,HeroAvailable=true,SiegeAvailable=true,TroopsPerBattle=9,SpellsPerBattle=2};
+                    var orderedSettings=new Settings{Platform="GooglePlayGames",ActionOrder=order,DeploymentMode=mode,Troops=9,Spells=2,AttackDurationSeconds=60};
+                    var orderedRunner=new Runner(orderedGame,orderedSettings,2,false,logs.Add,new Random(8));orderedRunner.Start(now);
+                    for(int t=0;t<10000 && orderedRunner.Active;t++){orderedGame.Now=now.AddMilliseconds(t*100);orderedRunner.Tick(orderedGame.Now);}
+                    var expected=new List<Keys>();for(int battle=0;battle<2;battle++)foreach(string action in order){if(action=="Heroes" || action=="HeroAbilities")expected.AddRange(new[]{Keys.Q,Keys.W,Keys.E,Keys.R});else expected.Add(action=="Siege"?Keys.Z:action=="Army"?Keys.D1:Keys.A);}
+                    Assert(orderedRunner.Completed==2 && orderedGame.Deployments==18 && orderedGame.SpellCasts==4 && orderedGame.HeroDeployments==8 && orderedGame.SiegeDeployments==2,"configured order preserves exact counts across battles");
+                    Assert(orderedGame.SelectionKeys.SequenceEqual(expected),"all valid permutations follow the requested key order in both modes");
+                    Assert((orderedGame.EndedAt-orderedGame.TroopStarts[9]).TotalSeconds>=55 && (orderedGame.EndedAt-orderedGame.TroopStarts[9]).TotalSeconds<=66,"custom order still times each battle from its first army troop");
+                }
+            }
+            Assert(validOrders==60,"all sixty valid action orders tested");
+            var spellsFirstGame=new FakeGame{FlexibleActions=true,HeroAvailable=true,SiegeAvailable=true};
+            var spellsFirstSettings=new Settings{Platform="GooglePlayGames",ActionOrder=new[]{"Spells","Army","Heroes","HeroAbilities","Siege"}};
+            var spellsFirstRunner=new Runner(spellsFirstGame,spellsFirstSettings,1,false,logs.Add,new Random(1));spellsFirstRunner.Start(now);
+            for(int t=0;t<10000 && spellsFirstRunner.Active;t++){spellsFirstGame.Now=now.AddMilliseconds(t*100);spellsFirstRunner.Tick(spellsFirstGame.Now);}
+            Assert(spellsFirstRunner.Completed==1 && spellsFirstGame.SpellCasts==11 && spellsFirstGame.Deployments==25 && spellsFirstGame.SelectionKeys[0]==Keys.A,"entire opening and delayed spell batch completes before the next configured action");
+            var reorderedCutoffGame=new FakeGame{FlexibleActions=true,HeroAvailable=true,SiegeAvailable=true,TroopsPerBattle=1};
+            var reorderedCutoffRunner=new Runner(reorderedCutoffGame,new Settings{Platform="GooglePlayGames",Troops=1,ActionOrder=new[]{"Army","Heroes","Siege","HeroAbilities","Spells"}},1,false,logs.Add,new Random(1));reorderedCutoffRunner.Start(now);
+            for(int t=0;t<10000 && reorderedCutoffRunner.Active && reorderedCutoffRunner.State!="Deploy hero";t++){reorderedCutoffGame.Now=now.AddMilliseconds(t*100);reorderedCutoffRunner.Tick(reorderedCutoffGame.Now);}
+            reorderedCutoffGame.Now=reorderedCutoffGame.TroopStarts[0].AddMinutes(2);reorderedCutoffRunner.Tick(reorderedCutoffGame.Now);
+            Assert(reorderedCutoffRunner.State=="Ending attack" && reorderedCutoffGame.SupportPoints.Count==0 && reorderedCutoffGame.SpellCasts==0,"first-troop deadline cancels support stages that follow army in a custom order");
+            foreach(string[] invalidOrder in new[]{new string[0],new[]{"Army","Army","Spells","Heroes","HeroAbilities"},new[]{"Heroes","Siege","Army","Unknown","Spells"}}){bool failed=false;try{Settings.ValidateOrder(invalidOrder);}catch{failed=true;}Assert(failed,"missing, duplicated and unknown actions rejected");}
+            Assert(Settings.FromJson("{}").ActionOrder.SequenceEqual(new[]{"Heroes","Siege","Army","HeroAbilities","Spells"}),"old settings retain default order");
             foreach(string mode in new[]{"LShape","FourSides"}) foreach(bool siege in new[]{false,true}) foreach(bool hero in new[]{false,true}) {
                 var supportGame=new FakeGame{SiegeAvailable=siege,HeroAvailable=hero};
                 var supportSettings=new Settings{Platform="GooglePlayGames",DeploymentMode=mode};

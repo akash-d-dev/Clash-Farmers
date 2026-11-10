@@ -39,6 +39,15 @@ namespace ClashPekkas {
         public int Troops=25, Battles=10, MinDelayMs=130, MaxDelayMs=250;
         public string Platform="BlueStacks";
         public string DeploymentMode="LShape";
+        public string[] ActionOrder={"Heroes","Siege","Army","HeroAbilities","Spells"};
+        public static string ActionLabel(string action) {
+            switch(action){case "Heroes":return "Deploy heroes";case "Siege":return "Deploy siege";case "Army":return "Deploy army";case "HeroAbilities":return "Hero abilities";case "Spells":return "Cast spells";default:return action;}
+        }
+        public static void ValidateOrder(string[] order) {
+            string[] required={"Heroes","Siege","Army","HeroAbilities","Spells"};
+            if(order==null || order.Length!=5 || order.Distinct().Count()!=5 || required.Any(action=>!order.Contains(action)))throw new Exception("Action order must contain heroes, siege, army, abilities and spells once each.");
+            if(Array.IndexOf(order,"HeroAbilities")<Array.IndexOf(order,"Heroes"))throw new Exception("Place Hero abilities after Deploy heroes.");
+        }
         public bool FourSides { get { return DeploymentMode=="FourSides"; } }
         public bool GooglePlay { get { return Platform=="GooglePlayGames"; } }
         public string PlayerName { get { return GooglePlay ? "Google Play Developer (ADB)" : "BlueStacks"; } }
@@ -112,6 +121,7 @@ namespace ClashPekkas {
             settings.Validate();return settings;
         }
         public void Validate() {
+            ValidateOrder(ActionOrder);
             if(Platform!="BlueStacks" && Platform!="GooglePlayGames") throw new Exception("Select BlueStacks or Google Play Games.");
             if(DeploymentMode!="LShape" && DeploymentMode!="FourSides") throw new Exception("Select L-shaped or all four sides deployment.");
             if (Troops<1 || Troops>500 || Battles<1 || Battles>30) throw new Exception("Use 1-500 troop clicks and 1-30 battles.");
@@ -239,6 +249,23 @@ namespace ClashPekkas {
         LootReading previousLoot;int lootFailures,lootConfirmations;
         DateTime troopsFinished,spellDue,battleDeadline;
         readonly List<Keys> pendingAbilities=new List<Keys>();int abilityIndex;
+        int actionIndex;
+        bool SupportEnabled {get{return settings.GooglePlay && settings.DeploySiegeAndFirstHero && game is ISupportGame;}}
+        void AdvanceAction(DateTime now,int delay=0) {
+            if(deployOnly){Go("Select troops",now);next=now.AddMilliseconds(delay);return;}
+            while(actionIndex<settings.ActionOrder.Length) {
+                string action=settings.ActionOrder[actionIndex++],state=null;
+                if(action=="Heroes" && SupportEnabled)state="Select hero";
+                else if(action=="Siege" && SupportEnabled)state="Select siege";
+                else if(action=="Army")state="Select troops";
+                else if(action=="HeroAbilities" && pendingAbilities.Count>0)state="Hero ability";
+                else if(action=="Spells" && spellsAvailable)state="Select spells";
+                if(state==null){log("Skipping "+Settings.ActionLabel(action)+": disabled or unavailable.");continue;}
+                log("Action "+actionIndex+"/5: "+Settings.ActionLabel(action)+".");Go(state,now);next=now.AddMilliseconds(delay);return;
+            }
+            log("Configured action order complete. Waiting for result or cutoff.");Go("Result",now);next=now.AddMilliseconds(delay);
+        }
+        static bool ActionState(string state) {return state=="Deploying" || state.StartsWith("Select ") || state=="Deploy hero" || state=="Deploy siege" || state=="Hero ability" || state=="Opening spells" || state=="Spells";}
         bool scannedNavigation;
         public string State { get; private set; }
         public string Message { get; private set; }
@@ -302,7 +329,7 @@ namespace ClashPekkas {
             var tickClock=Stopwatch.StartNew();
             try {
                 game.Guard();
-                if(battleDeadline!=DateTime.MinValue && now>=battleDeadline && (State=="Deploying" || State=="Hero ability" || State=="Select spells" || State=="Opening spells" || State=="Spells" || State=="Result")) {
+                if(battleDeadline!=DateTime.MinValue && now>=battleDeadline && (ActionState(State) || State=="Result")) {
                     log("Battle duration reached from the first troop placement. Cancelling remaining deployment, abilities and spells.");Go("Ending attack",now);next=now;
                 }
                 if (now<next) return;
@@ -352,11 +379,9 @@ namespace ClashPekkas {
                     PlacementPlan troopLayout=Plan.Troops(settings,reverse,random);plan=troopLayout.Points;deployed=0;
                     DeploymentSide firstSide=troopLayout.Sides[Array.FindIndex(troopLayout.Counts,count=>count>0)];
                     supportPoint=new Vec((firstSide.A.X+firstSide.B.X)/2,(firstSide.A.Y+firstSide.B.Y)/2);
-                    heroIndex=0;abilityIndex=0;pendingAbilities.Clear();battleDeadline=DateTime.MinValue;heroPoints=Enumerable.Range(0,4).Select(i=>{DeploymentSide side=troopLayout.Sides[settings.FourSides?i:i/2];return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2);}).ToArray();
+                    heroIndex=0;abilityIndex=0;actionIndex=0;pendingAbilities.Clear();troopsFinished=DateTime.MinValue;battleDeadline=DateTime.MinValue;heroPoints=Enumerable.Range(0,4).Select(i=>{DeploymentSide side=troopLayout.Sides[settings.FourSides?i:i/2];return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2);}).ToArray();
                     log("Battle "+(Completed+1)+": "+(settings.FourSides?"all four sides":reverse?"reverse L":"normal L")+"; "+troopLayout.Summary+" troop clicks on the outer strip.");
-                    if(settings.GooglePlay && settings.DeploySiegeAndFirstHero && game is ISupportGame) {log("Heroes deploy first; siege uses "+firstSide.Name+" at the troop-line midpoint. Abilities wait for the army.");Go("Select hero",now);}
-                    else Go("Select troops",now);
-                    next=now;return;
+                    log("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+".");AdvanceAction(now);return;
                 }
                 else if(State=="Scouting" && (now-entered).TotalSeconds>25) {
                     Vec end=game.Find("end");
@@ -374,7 +399,9 @@ namespace ClashPekkas {
                     bool available=((ISupportGame)game).TrySelectSupport(supportKey);
                     log((siege?"Siege (Z)":"Hero ("+supportKey+")")+(available?" selection key sent.":" selection skipped."));
                     if(!siege && !available)heroIndex++;
-                    Go(available?(siege?"Deploy siege":"Deploy hero"):(siege?"Select troops":heroIndex<4?"Select hero":"Select siege"),now);
+                    if(available)Go(siege?"Deploy siege":"Deploy hero",now);
+                    else if(!siege && heroIndex<4)Go("Select hero",now);
+                    else AdvanceAction(now);
                     next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+(available?350:40));return;
                 }
                 else if(State=="Deploy siege" || State=="Deploy hero") {
@@ -382,12 +409,14 @@ namespace ClashPekkas {
                     bool siege=State=="Deploy siege";game.Click(siege?supportPoint:heroPoints[heroIndex]);
                     log((siege?"Siege":"Hero "+HeroKeys[heroIndex])+" placement attempt sent.");
                     if(!siege){pendingAbilities.Add(HeroKeys[heroIndex]);heroIndex++;}
-                    Go(siege?"Select troops":heroIndex<4?"Select hero":"Select siege",now);next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+350);return;
+                    if(!siege && heroIndex<4)Go("Select hero",now);else AdvanceAction(now);
+                    next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+350);return;
                 }
                 else if(State=="Hero ability") {
                     if(game.Find("return")!=null){Go("Result",now);return;}
-                    game.PressKey(pendingAbilities[abilityIndex]);log("Hero "+pendingAbilities[abilityIndex]+" ability key sent after full army deployment.");abilityIndex++;
-                    Go(abilityIndex<pendingAbilities.Count?"Hero ability":spellsAvailable?"Select spells":"Result",now);next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+200);return;
+                    game.PressKey(pendingAbilities[abilityIndex]);log("Hero "+pendingAbilities[abilityIndex]+" ability key sent at the configured step.");abilityIndex++;
+                    if(abilityIndex<pendingAbilities.Count)Go("Hero ability",now);else AdvanceAction(now);
+                    next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+200);return;
                 }
                 else if(State=="Select troops") {
                     if(settings.GooglePlay) {game.PressKey(Keys.D1);log("First troop selected with Google Play Games key 1.");}else game.Click(troopCardPoint);
@@ -406,8 +435,8 @@ namespace ClashPekkas {
                         log("Sent all "+settings.Troops+" deployment clicks.");
                         troopsFinished=inputFinished;
                         if (deployOnly) Stop("Single deployment finished. Battle remains running; no navigation clicks.");
-                        else if(pendingAbilities.Count>0 || spellsAvailable) { Go(pendingAbilities.Count>0?"Hero ability":"Select spells",now);next=inputFinished.AddMilliseconds(350);log("Waiting for the final troop click to register before abilities and spells."); }
-                        else Go("Result",now);
+                        else {AdvanceAction(inputFinished,350);log("Waiting for the final troop click to register before the next action.");}
+                        return;
                     }
                 }
                 else if(State=="Select spells") {
@@ -420,7 +449,7 @@ namespace ClashPekkas {
                     if(spellsCast>0 && spellsCast%6==0 && game.Find("return")!=null) {log("Battle finished after "+spellsCast+" spells. Skipping remaining casts.");Go("Result",now);return;}
                     Vec opening=openingSpells[spellsCast++];game.Click(opening);spellHistory.Add(opening);
                     log("Haste spell "+spellsCast+"/"+settings.Spells+": "+openingLayout.Sides[openingLayout.PointSides[spellsCast-1]].Name+", depth "+(settings.FourSides?settings.FourSidesSpellDepthPercent:settings.LShapeOpeningDepthPercent)+"%.");
-                    if(spellsCast==settings.Spells) {log("Sent all "+settings.Spells+" spell casts.");Go("Result",now);}
+                    if(spellsCast==settings.Spells) {log("Sent all "+settings.Spells+" spell casts.");AdvanceAction(now,200);return;}
                     else if(spellsCast==openingSpells.Count) {
                         Go("Spells",now);int delay=random.Next(settings.MinFirstSpellWaitMs,settings.MaxFirstSpellWaitMs+1);spellDue=now.AddMilliseconds(delay);next=now.AddMilliseconds(500);
                         log("Next spell in "+(delay/1000.0).ToString("0.0")+" seconds.");
@@ -432,10 +461,10 @@ namespace ClashPekkas {
                     if(game.Find("return")!=null) { log("Battle finished after "+spellsCast+" spells. Skipping remaining casts.");Go("Result",now); }
                     else {
                         if(now>=spellDue) {
-                            Vec target=Plan.LaterSpell(settings,reverseAttack,(now-troopsFinished).TotalSeconds,random,spellHistory);
+                            Vec target=Plan.LaterSpell(settings,reverseAttack,troopsFinished==DateTime.MinValue?0:(now-troopsFinished).TotalSeconds,random,spellHistory);
                             game.Click(target);spellHistory.Add(target);spellsCast++;
                             log("Haste spell "+spellsCast+"/"+settings.Spells+": later batch, depth "+settings.LShapeLaterDepthPercent+"%.");
-                            if(spellsCast==settings.Spells) { log("Sent all "+settings.Spells+" spell casts.");Go("Result",now); }
+                            if(spellsCast==settings.Spells) { log("Sent all "+settings.Spells+" spell casts.");AdvanceAction(now,200);return; }
                             else {
                                 int delay=random.Next(settings.MinSpellIntervalMs,settings.MaxSpellIntervalMs+1);
                                 spellDue=now.AddMilliseconds(delay);
@@ -1067,6 +1096,33 @@ namespace ClashPekkas {
                 title.IndexOf("App Player",StringComparison.OrdinalIgnoreCase)>=0;
         }
     }
+    public sealed class ActionOrderForm : Form {
+        sealed class Entry {public string Id;public override string ToString(){return Settings.ActionLabel(Id);}}
+        readonly ListBox list=new ListBox();readonly Button up=new Button(),down=new Button(),save=new Button();readonly Label error=new Label();
+        public string[] SelectedOrder {get{return list.Items.Cast<Entry>().Select(item=>item.Id).ToArray();}}
+        public ActionOrderForm(string[] order) {
+            Text="Action order";ClientSize=new Size(460,325);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);
+            Controls.Add(new Label{Text="Select an action, then move it up or down.",AutoSize=true,Location=new Point(18,18)});
+            list.Name="actionOrderList";list.Location=new Point(18,53);list.Size=new Size(310,145);list.ItemHeight=24;Controls.Add(list);
+            foreach(string id in order)list.Items.Add(new Entry{Id=id});list.SelectedIndex=0;
+            up.Name="moveActionUp";up.Text="Move up";up.Location=new Point(340,65);up.Size=new Size(100,34);up.Click+=delegate{MoveSelected(-1);};Controls.Add(up);
+            down.Name="moveActionDown";down.Text="Move down";down.Location=new Point(340,110);down.Size=new Size(100,34);down.Click+=delegate{MoveSelected(1);};Controls.Add(down);
+            error.Name="orderValidation";error.ForeColor=Color.DarkRed;error.Location=new Point(18,207);error.Size=new Size(420,42);Controls.Add(error);
+            save.Name="saveActionOrder";save.Text="Save";save.Location=new Point(230,270);save.Size=new Size(100,34);save.Click+=delegate{Settings.ValidateOrder(SelectedOrder);DialogResult=DialogResult.OK;};Controls.Add(save);AcceptButton=save;
+            var cancel=new Button{Text="Cancel",DialogResult=DialogResult.Cancel,Location=new Point(340,270),Size=new Size(100,34)};Controls.Add(cancel);CancelButton=cancel;
+            var reset=new Button{Text="Reset default",Location=new Point(18,270),Size=new Size(120,34)};reset.Click+=delegate{list.Items.Clear();foreach(string id in new Settings().ActionOrder)list.Items.Add(new Entry{Id=id});list.SelectedIndex=0;RefreshOrder();};Controls.Add(reset);
+            list.SelectedIndexChanged+=delegate{RefreshOrder();};RefreshOrder();
+        }
+        void MoveSelected(int direction) {
+            int from=list.SelectedIndex,to=from+direction;if(from<0 || to<0 || to>=list.Items.Count)return;
+            object item=list.Items[from];list.Items.RemoveAt(from);list.Items.Insert(to,item);list.SelectedIndex=to;RefreshOrder();
+        }
+        void RefreshOrder() {
+            up.Enabled=list.SelectedIndex>0;down.Enabled=list.SelectedIndex>=0 && list.SelectedIndex<list.Items.Count-1;
+            try{Settings.ValidateOrder(SelectedOrder);save.Enabled=true;error.Text="Hero abilities must follow Deploy heroes. Disabled actions are skipped.";error.ForeColor=SystemColors.GrayText;}
+            catch(Exception ex){save.Enabled=false;error.Text=ex.Message;error.ForeColor=Color.DarkRed;}
+        }
+    }
     public sealed class MainForm : Form {
         readonly string folder; readonly OcrReader ocr; Settings settings;
         readonly PlayerPicker choosePlayer; readonly PlayerActivator activatePlayer;
@@ -1123,7 +1179,9 @@ namespace ClashPekkas {
             platformSelector.Name="platformSelector";platformSelector.DropDownStyle=ComboBoxStyle.DropDownList;
             platformSelector.Items.AddRange(new object[]{"BlueStacks","Google Play Developer (ADB)"});platformSelector.Location=new Point(95,94);platformSelector.Size=new Size(250,27);
             platformSelector.SelectedIndex=settings.GooglePlay?1:0;actions.Add(platformSelector);Controls.Add(platformSelector);
-            supportUnits.Name="supportUnits";supportUnits.Text="Deploy siege + all heroes / abilities";supportUnits.AutoSize=true;supportUnits.Location=new Point(370,96);supportUnits.Checked=settings.DeploySiegeAndFirstHero;Controls.Add(supportUnits);
+            supportUnits.Name="supportUnits";supportUnits.Text="Siege + heroes / abilities";supportUnits.AutoSize=true;supportUnits.Location=new Point(365,96);supportUnits.Checked=settings.DeploySiegeAndFirstHero;Controls.Add(supportUnits);
+            var orderButton=new Button{Name="actionOrderButton",Text="Action order...",Location=new Point(575,92),Size=new Size(163,30)};
+            orderButton.Click+=delegate{Safely(delegate{SaveInputs();using(var dialog=new ActionOrderForm(settings.ActionOrder)){if(dialog.ShowDialog(this)==DialogResult.OK)ApplyActionOrder(dialog.SelectedOrder);}});};actions.Add(orderButton);Controls.Add(orderButton);
             Controls.Add(new Label{Text="Deployment",AutoSize=true,Location=new Point(22,135)});
             deploymentSelector.Name="deploymentSelector";deploymentSelector.DropDownStyle=ComboBoxStyle.DropDownList;
             deploymentSelector.Items.AddRange(new object[]{"L-shaped","All four sides"});deploymentSelector.Location=new Point(115,131);deploymentSelector.Size=new Size(195,27);
@@ -1207,6 +1265,12 @@ namespace ClashPekkas {
             nextSettings.MinGold=(long)goldMinimum.Value;nextSettings.MinElixir=(long)elixirMinimum.Value;nextSettings.MinDarkElixir=(long)darkMinimum.Value;nextSettings.FilterLoot=true;nextSettings.Validate();
             File.WriteAllText(AppFiles.SettingsFile(folder),new JavaScriptSerializer().Serialize(nextSettings));settings=nextSettings;SyncDepthControls();
         }
+        void ApplyActionOrder(string[] order) {
+            if(IsBusy)throw new Exception("Action order cannot change during a run.");
+            Settings.ValidateOrder(order);var updated=Settings.FromJson(File.ReadAllText(AppFiles.SettingsFile(folder)));updated.ActionOrder=(string[])order.Clone();updated.Validate();
+            File.WriteAllText(AppFiles.SettingsFile(folder),new JavaScriptSerializer().Serialize(updated));settings=updated;
+            Write("Saved action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel)));
+        }
         void SyncDepthControls() {
             bool four=deploymentSelector.SelectedIndex==1,enabled=!IsBusy && settings.UseSpells && spellCount.Value>0;
             openingDepthLabel.Text=four?"Spell depth (%)":"Opening spell depth (%)";
@@ -1277,7 +1341,7 @@ namespace ClashPekkas {
             Write(useBackground ? "Control: local Android connection. Desktop focus and mouse are not used." : "Control: desktop mouse. "+settings.PlayerName+" must remain active.");
             Write(settings.FourSides ? "Spell depth: "+settings.FourSidesSpellDepthPercent+"% from troop lines toward center." : "Spell depths: opening "+settings.LShapeOpeningDepthPercent+"%, later "+settings.LShapeLaterDepthPercent+"% from troop lines toward center.");
             if(settings.GooglePlay) Write("Selection uses the game's default keys: 1 for the first troop, A for the first spell. Load the intended troop and Haste in those first slots.");
-            if(settings.GooglePlay && settings.DeploySiegeAndFirstHero) Write("Support order: Q/W/E/R hero placements, siege Z, army 1, then hero abilities and spells. Four sides: one hero each; L-shaped: two per side.");
+            Write("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+". Disabled actions are skipped.");
             if(!useBackground) activatePlayer(target);
         }
         void Finish(string reason,bool alreadyLogged) {

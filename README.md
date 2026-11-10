@@ -25,7 +25,7 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 
 1. Open Clash of Clans on the home village with menus closed and its normal centered camera.
 2. Open Start.cmd, select the platform, and set the controls below. A fresh clone can run directly through Windows PowerShell; optionally run Build.ps1 first to create the executable.
-3. Click Start. A three-second countdown lets the runner bring the game forward.
+3. Optionally open Action order... to arrange the five actions, then click Start. A three-second countdown precedes connection; ADB mode leaves your desktop focus alone.
 
 | Control | Range / behavior |
 | --- | --- |
@@ -34,7 +34,8 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 | Deployment | L-shaped (two adjacent sides) or All four sides; defaults to L-shaped |
 | Spells per attack | 0–100 Haste cast attempts from the selected first spell; zero skips spells |
 | Spell depth (%) | 0–100; 0 is the troop deployment line and 100 is the estimated base center. Arrows step by 5; exact percentages can be typed. |
-| Deploy siege + all heroes / abilities | Google Developer mode only; enabled by default. Heroes first, then siege, then army, then hero ability keys. |
+| Siege + heroes / abilities | Google Developer mode only; enabled by default. Enables the hero, siege and ability actions in the chosen order. |
+| Action order... | Move the five actions up or down, Save or Cancel, or Reset default. Hero abilities must follow hero deployment. |
 | End battle after (s) | 3–180 seconds from the first troop placement, randomized by ±5 seconds and clamped to 3–180 |
 | Gold / Elixir / Dark elixir min | 0–99,999,999 each; zero disables that resource check |
 
@@ -58,7 +59,11 @@ The window/taskbar title shows the activity first, followed by remaining battles
 
 Google Developer mode selects the first troop with Android key event `1` and the first spell with `A`, sent through ADB rather than Windows input. Keep default game mappings enabled, the intended troop in the first troop slot, and the intended spell in the first spell slot. Troop/spell selection does not use card OCR or reference images. Loot and navigation still use OCR on ADB screenshots. The game must be the foreground app inside Android, even though the Windows emulator window can remain minimized.
 
-With support enabled, the runner directly attempts heroes `Q/W/E/R`, then siege `Z` on the first side, then the configured army from troop `1`. In four-side mode each hero has one side; in L-shaped mode Q/W share the first side and E/R share the second. Each hero is placed at that side's troop-line midpoint. After the last troop placement settles for 350 ms, the runner sends the queued Q/W/E/R ability keys, then casts spells. Abilities still run when spells are disabled. These are input attempts, not confirmed deployments or abilities. At the user's request, unavailable cards are attempted without the former image-recognition gate; load the expected army/card layout before starting. The saved toggle retains its legacy JSON name `DeploySiegeAndFirstHero` for compatibility. BlueStacks retains its existing troop/spell flow.
+Action order defaults to **Deploy heroes → Deploy siege → Deploy army → Hero abilities → Cast spells**. Open Action order... and use Move up / Move down to choose another order. Save applies it to subsequent battles; Cancel preserves the saved order, and Reset default restores the default within the dialog. Each action occurs once; hero abilities must be after hero deployment, but can be before the army if you choose. The order is locked while running. Unsupported or disabled support actions and zero/disabled spells are skipped without changing the positions of the other actions. A spell action includes both its opening and delayed batches before advancing to the next action. Choosing spells before army therefore waits for that entire spell schedule before selecting troops.
+
+With support enabled, heroes use `Q/W/E/R`, siege uses `Z` on the first side, and the configured army uses troop `1`. In four-side mode each hero has one side; in L-shaped mode Q/W share the first side and E/R share the second. Each hero is placed at that side's troop-line midpoint. The ability action sends the queued Q/W/E/R ability keys. Abilities still run when spells are disabled. These are input attempts, not confirmed deployments or abilities. At the user's request, unavailable cards are attempted without the former image-recognition gate; load the expected army/card layout before starting. The saved toggle retains its legacy JSON name `DeploySiegeAndFirstHero` for compatibility. BlueStacks skips support actions and follows the chosen army/spell order.
+
+The order is saved as `ActionOrder`, containing each of `Heroes`, `Siege`, `Army`, `HeroAbilities`, and `Spells` exactly once. Older settings without this field use the default sequence. Existing troop counts, spell settings, loot targets and geometry are preserved. The cutoff timer still begins with the first army troop, wherever Army appears in the sequence, and cancels all remaining actions if reached.
 
 BlueStacks selects the leftmost troop stack using its stack marker and position rather than a P.E.K.K.A portrait, and checks the Haste reference image before clicking its saved spell-card position. A missing/unrecognized troop card stops before deployment. Both platforms use your configured troop and spell click counts without capping them to actual inventory or switching cards. The existing advanced `UseSpells=false` setting still disables spells regardless of the configured count.
 

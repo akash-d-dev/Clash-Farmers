@@ -1,6 +1,7 @@
 {
   "Troops": 25,
   "DeploymentMode": "LShape",
+  "ActionOrder": ["Heroes", "Siege", "Army", "HeroAbilities", "Spells"],
   "DeploySiegeAndFirstHero": true,
   "LShapeOpeningDepthPercent": 0,
   "LShapeLaterDepthPercent": 70,

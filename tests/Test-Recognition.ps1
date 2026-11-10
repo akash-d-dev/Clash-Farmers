@@ -54,6 +54,25 @@ $render = [Drawing.Bitmap]::new($form.Width,$form.Height)
 try {
     if ($form.Controls.Count -lt 10) { throw 'App controls are missing.' }
     if ($form.Text -ne 'Clash Farmer - Ready') { throw 'Idle app title is incorrect.' }
+    $orderButton=$form.Controls.Find('actionOrderButton',$true)[0]
+    if($null -eq $orderButton -or -not $orderButton.Enabled){throw 'Action order button must be enabled while idle.'}
+    $orderDialog=[ClashPekkas.ActionOrderForm]::new([ClashPekkas.Settings]::new().ActionOrder)
+    try {
+        $orderDialog.Show();[Windows.Forms.Application]::DoEvents()
+        $orderList=$orderDialog.Controls.Find('actionOrderList',$true)[0]
+        $moveUp=$orderDialog.Controls.Find('moveActionUp',$true)[0];$moveDown=$orderDialog.Controls.Find('moveActionDown',$true)[0];$saveOrder=$orderDialog.Controls.Find('saveActionOrder',$true)[0]
+        $orderList.SelectedIndex=3;$moveUp.PerformClick();$moveUp.PerformClick();$moveUp.PerformClick()
+        if($saveOrder.Enabled){throw 'Abilities before heroes must disable Save.'}
+        $moveDown.PerformClick()
+        if(-not $saveOrder.Enabled){throw 'Moving abilities after heroes must enable Save.'}
+        $chosenOrder=$orderDialog.SelectedOrder
+        $dialogImage=[Drawing.Bitmap]::new($orderDialog.Width,$orderDialog.Height)
+        try{$orderDialog.DrawToBitmap($dialogImage,[Drawing.Rectangle]::new(0,0,$orderDialog.Width,$orderDialog.Height));$dialogImage.Save("$TestOutputDirectory\action-order-preview.png",[Drawing.Imaging.ImageFormat]::Png)}finally{$dialogImage.Dispose()}
+        $saveOrder.PerformClick()
+        if($orderDialog.DialogResult -ne [Windows.Forms.DialogResult]::OK){throw 'Action order Save failed.'}
+    }finally{$orderDialog.Dispose()}
+    $privateOrder=[Reflection.BindingFlags]'Instance,NonPublic'
+    $form.GetType().GetMethod('ApplyActionOrder',$privateOrder).Invoke($form,(,[object]$chosenOrder))
     $stop = $form.Controls.Find('stopButton',$true)[0]
     if ($null -eq $stop -or $stop.Enabled -or $form.IsBusy) { throw 'Stop must be disabled while idle.' }
     $start = $form.Controls.Find('startButton',$true)[0]
@@ -88,6 +107,7 @@ try {
     $troops.Value=500;$duration.Value=3;$gold.Value=0;$elixir.Value=0;$dark.Value=100
     $saved=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText((Join-Path $testFolder 'data\settings.json')))
     if($saved.Spells -ne 15 -or $saved.DeploymentMode -ne 'FourSides'){throw 'Deployment mode and spell count were not saved.'}
+    if(($saved.ActionOrder -join ',') -ne ($chosenOrder -join ',')){throw 'Chosen action order must persist through other input changes.'}
     if(-not $saved.DeploySiegeAndFirstHero){throw 'Support preference must save.'}
     if($saved.LShapeOpeningDepthPercent -ne 10 -or $saved.LShapeLaterDepthPercent -ne 70 -or $saved.FourSidesSpellDepthPercent -ne 20){throw 'Independent depth values were not preserved.'}
     if($saved.Troops -ne 500 -or $saved.AttackDurationSeconds -ne 3 -or $saved.MinGold -ne 0 -or $saved.MinElixir -ne 0 -or $saved.MinDarkElixir -ne 100){throw 'Configurable inputs were not saved.'}
@@ -123,6 +143,7 @@ try {
     if($troops.Enabled -or $duration.Enabled -or $gold.Enabled -or $elixir.Enabled -or $dark.Enabled){throw 'Run settings must be locked during countdown.'}
     if($spells.Enabled -or $deployment.Enabled){throw 'Spell and deployment settings must be locked during countdown.'}
     if($supportToggle.Enabled){throw 'Support toggle must lock while running.'}
+    if($orderButton.Enabled){throw 'Action order must lock during a run.'}
     if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'Depth controls must lock during countdown.'}
     $stop.PerformClick()
     if ($form.IsBusy -or $stop.Enabled -or -not $start.Enabled) { throw 'Stopping must immediately restore idle controls.' }
