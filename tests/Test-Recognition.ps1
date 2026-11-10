@@ -93,6 +93,12 @@ try {
     if($supportToggle.Enabled){throw 'Support toggle should be disabled for BlueStacks.'}
     $form.Controls.Find('platformSelector',$true)[0].SelectedIndex=1
     if(-not $supportToggle.Enabled){throw 'Support toggle should enable for Google.'}
+    $swipeToggle=$form.Controls.Find('randomSwipes',$true)[0]
+    if($null -eq $swipeToggle -or -not $swipeToggle.Enabled -or -not $swipeToggle.Checked){throw 'Random swipe checkbox should default on for Google ADB.'}
+    $swipeToggle.Checked=$false
+    $swipeSaved=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText((Join-Path $testFolder 'data\settings.json')))
+    if($swipeSaved.RandomSwipes){throw 'Random swipe preference must save.'}
+    $swipeToggle.Checked=$true
     $supportToggle.Checked=$false;$supportToggle.Checked=$true
     $openingDepth=$form.Controls.Find('openingDepth',$true)[0]
     $laterDepth=$form.Controls.Find('laterDepth',$true)[0]
@@ -143,12 +149,14 @@ try {
     if($troops.Enabled -or $duration.Enabled -or $gold.Enabled -or $elixir.Enabled -or $dark.Enabled){throw 'Run settings must be locked during countdown.'}
     if($spells.Enabled -or $deployment.Enabled){throw 'Spell and deployment settings must be locked during countdown.'}
     if($supportToggle.Enabled){throw 'Support toggle must lock while running.'}
+    if($swipeToggle.Enabled){throw 'Random swipe setting must lock while running.'}
     if($orderButton.Enabled){throw 'Action order must lock during a run.'}
     if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'Depth controls must lock during countdown.'}
     $stop.PerformClick()
     if ($form.IsBusy -or $stop.Enabled -or -not $start.Enabled) { throw 'Stopping must immediately restore idle controls.' }
     if(-not $spells.Enabled -or -not $deployment.Enabled){throw 'New settings must unlock after Stop.'}
     if(-not $fourDepth.Enabled){throw 'Visible depth control must unlock after Stop.'}
+    if(-not $swipeToggle.Enabled){throw 'Random swipe setting must unlock after Stop.'}
     if ($form.Text -ne 'Stopped | 30 left (0/30) - Clash Farmer') { throw 'Cancelled title must retain the remaining count.' }
     $activity = $form.Controls.Find('activityLog',$true)[0]
     $length = $activity.TextLength

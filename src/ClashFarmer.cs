@@ -55,6 +55,7 @@ namespace ClashPekkas {
         public long MinGold=500000,MinElixir=500000,MinDarkElixir=0;
         public int AttackDurationSeconds=0;
         public bool UseSpells=true;
+        public bool RandomSwipes=true;
         public bool DeploySiegeAndFirstHero=true;
         public int Spells=11,MinSpellIntervalMs=2000,MaxSpellIntervalMs=5000;
         public int MinFirstSpellWaitMs=5000,MaxFirstSpellWaitMs=10000;
@@ -241,6 +242,7 @@ namespace ClashPekkas {
     }
     public interface ICapturedGame : IGame,IDisposable { Bitmap Capture(); }
     public interface ISupportGame { bool TrySelectSupport(Keys key); }
+    public interface ISwipeGame {void Swipe(Vec from,Vec to,int durationMs);}
     public sealed class Runner {
         readonly IGame game; readonly Settings settings; readonly Random random;
         readonly Action<string> log; readonly int limit; readonly bool deployOnly;
@@ -250,6 +252,14 @@ namespace ClashPekkas {
         DateTime troopsFinished,spellDue,battleDeadline;
         readonly List<Keys> pendingAbilities=new List<Keys>();int abilityIndex;
         int actionIndex;
+        bool battleSwipes;DateTime swipeDue;int homeSwipesRemaining;
+        bool SwipesEnabled {get{return settings.RandomSwipes && game is ISwipeGame && !deployOnly;}}
+        void SendSwipe(string stage,DateTime now) {
+            double angle=random.NextDouble()*Math.PI*2,distance=120+random.NextDouble()*80;
+            double x=.42+random.NextDouble()*.16,y=.40+random.NextDouble()*.16,dx=Math.Cos(angle)*distance/Vision.W,dy=Math.Sin(angle)*distance/Vision.H;
+            ((ISwipeGame)game).Swipe(new Vec(x-dx/2,y-dy/2),new Vec(x+dx/2,y+dy/2),random.Next(180,321));
+            log(stage+" swipe sent.");
+        }
         bool SupportEnabled {get{return settings.GooglePlay && settings.DeploySiegeAndFirstHero && game is ISupportGame;}}
         void AdvanceAction(DateTime now,int delay=0) {
             if(deployOnly){Go("Select troops",now);next=now.AddMilliseconds(delay);return;}
@@ -263,7 +273,7 @@ namespace ClashPekkas {
                 if(state==null){log("Skipping "+Settings.ActionLabel(action)+": disabled or unavailable.");continue;}
                 log("Action "+actionIndex+"/5: "+Settings.ActionLabel(action)+".");Go(state,now);next=now.AddMilliseconds(delay);return;
             }
-            log("Configured action order complete. Waiting for result or cutoff.");Go("Result",now);next=now.AddMilliseconds(delay);
+            log("Configured action order complete. Waiting for result or cutoff.");battleSwipes=SwipesEnabled;swipeDue=battleSwipes?now.AddMilliseconds(random.Next(2000,5001)):DateTime.MinValue;Go("Result",now);next=now.AddMilliseconds(delay);
         }
         static bool ActionState(string state) {return state=="Deploying" || state.StartsWith("Select ") || state=="Deploy hero" || state=="Deploy siege" || state=="Hero ability" || state=="Opening spells" || state=="Spells";}
         bool scannedNavigation;
@@ -276,10 +286,10 @@ namespace ClashPekkas {
             settings.Validate(); if (limit<1 || limit>30) throw new Exception("Battle limit must be 1-30.");
             this.game=game; this.settings=settings; this.limit=limit; this.deployOnly=deployOnly; this.log=log; this.random=random;
         }
-        public void Start(DateTime now) { Active=true; Completed=0;SkippedBases=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
+        public void Start(DateTime now) { Active=true; Completed=0;SkippedBases=0;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
         public void ResumeExistingBattle(DateTime now,int completed,bool searching=false) {
             if(completed<0 || completed>=limit) throw new Exception("Invalid completed battle count for recovery.");
-            Active=true;Completed=completed;SkippedBases=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
+            Active=true;Completed=completed;SkippedBases=0;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
         }
         void ResetLoot() { previousLoot=null;lootFailures=0;lootConfirmations=0; }
         void SkipBase(Vec nextButton,DateTime now,string reason) {
@@ -307,8 +317,8 @@ namespace ClashPekkas {
             }
             log("Loot accepted: "+amounts+".");ResetLoot();return true;
         }
-        public void Stop(string reason) { if (Active) log(reason); Active=false; State="Stopped"; Message=reason; }
-        void Go(string state,DateTime now) { State=state; entered=now; next=now.AddMilliseconds(600); stable=0; last=null; log("Waiting: "+state+" ("+Completed+"/"+limit+")"); }
+        public void Stop(string reason) { if (Active) log(reason); Active=false;battleSwipes=false;homeSwipesRemaining=0; State="Stopped"; Message=reason; }
+        void Go(string state,DateTime now) {if(state=="Ending attack" || state=="Exit battle" || state=="Return home")battleSwipes=false;State=state; entered=now; next=now.AddMilliseconds(600); stable=0; last=null; log("Waiting: "+state+" ("+Completed+"/"+limit+")"); }
         bool Ready(string name,out Vec point) {
             point=game.Find(name);
             if (point==null) { stable=0; last=null; return false; }
@@ -379,7 +389,7 @@ namespace ClashPekkas {
                     PlacementPlan troopLayout=Plan.Troops(settings,reverse,random);plan=troopLayout.Points;deployed=0;
                     DeploymentSide firstSide=troopLayout.Sides[Array.FindIndex(troopLayout.Counts,count=>count>0)];
                     supportPoint=new Vec((firstSide.A.X+firstSide.B.X)/2,(firstSide.A.Y+firstSide.B.Y)/2);
-                    heroIndex=0;abilityIndex=0;actionIndex=0;pendingAbilities.Clear();troopsFinished=DateTime.MinValue;battleDeadline=DateTime.MinValue;heroPoints=Enumerable.Range(0,4).Select(i=>{DeploymentSide side=troopLayout.Sides[settings.FourSides?i:i/2];return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2);}).ToArray();
+                    heroIndex=0;abilityIndex=0;actionIndex=0;battleSwipes=false;homeSwipesRemaining=0;pendingAbilities.Clear();troopsFinished=DateTime.MinValue;battleDeadline=DateTime.MinValue;heroPoints=Enumerable.Range(0,4).Select(i=>{DeploymentSide side=troopLayout.Sides[settings.FourSides?i:i/2];return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2);}).ToArray();
                     log("Battle "+(Completed+1)+": "+(settings.FourSides?"all four sides":reverse?"reverse L":"normal L")+"; "+troopLayout.Summary+" troop clicks on the outer strip.");
                     log("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+".");AdvanceAction(now);return;
                 }
@@ -475,8 +485,15 @@ namespace ClashPekkas {
                     }
                 }
                 else if (State=="Result") {
-                    if(Ready("return",out point)) { game.Click(point); Go("Return home",now); }
-                    if(State=="Result") { next=now.AddMilliseconds(2500);return; }
+                    bool finished=Ready("return",out point);if(point!=null)battleSwipes=false;
+                    if(finished) { game.Click(point); Go("Return home",now); }
+                    if(State=="Result") {
+                        if(battleSwipes && now>=swipeDue) {
+                            if(game.Find("retreat")!=null && game.Find("surrenderTitle")==null)SendSwipe("Battle",now);
+                            swipeDue=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+random.Next(2000,5001));
+                        }
+                        next=battleSwipes && swipeDue<now.AddMilliseconds(2500)?swipeDue:now.AddMilliseconds(2500);return;
+                    }
                 }
                 else if(State=="Ending attack") {
                     if(game.Find("return")!=null) {battleDeadline=DateTime.MinValue;Go("Result",now);}
@@ -491,8 +508,18 @@ namespace ClashPekkas {
                 }
                 else if (State=="Return home" && Ready("attack",out point)) {
                     Completed++; log("Completed battle "+Completed+"/"+limit+".");
-                    if (Completed>=limit) Stop("Finished "+Completed+" battles. Stopped at home.");
+                    if(SwipesEnabled){homeSwipesRemaining=random.Next(1,3);Go("Home swipes",now);next=now.AddMilliseconds(random.Next(1000,2001));return;}
+                    else if (Completed>=limit) Stop("Finished "+Completed+" battles. Stopped at home.");
                     else { ResetLoot();battleDeadline=DateTime.MinValue;scannedNavigation=false;OpenFromHome(point,now);return; }
+                }
+                else if(State=="Home swipes") {
+                    if(game.Find("attack")==null){next=now.AddMilliseconds(500);return;}
+                    SendSwipe("Home",now);homeSwipesRemaining--;
+                    if(homeSwipesRemaining==0){
+                        if(Completed>=limit)Stop("Finished "+Completed+" battles. Stopped at home.");
+                        else {ResetLoot();battleDeadline=DateTime.MinValue;scannedNavigation=false;Go("Home",now);next=now.AddMilliseconds(300);}
+                    }else next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+random.Next(1000,2001));
+                    return;
                 }
                 if (State!="Deploying" && State!="Spells" && State!="Opening spells" && State!="Select spells") next=now.AddMilliseconds(650);
             } catch (Exception ex) { Stop("Stopped: "+ex.Message); }
@@ -515,33 +542,42 @@ namespace ClashPekkas {
         public static bool Label(string name,string text) {
             string s=Clean(text);
             // Stylized Battle lettering: t may be f/e, and l may be i/1.
-            if (name=="attack") return Regex.IsMatch(s,@"^ba[tfe][tf][li1]e$") || Regex.IsMatch(text??"",@"\battack\b",RegexOptions.IgnoreCase) || s=="attak";
-            if (name=="next") return Regex.IsMatch(text??"",@"\bnext\b",RegexOptions.IgnoreCase) || NearLabel(s,"next");
-            if (name=="end") return NearLabel(Clean((text??"").Replace('+','t')),"endbattle") || Regex.IsMatch(s,@"^endba[tfe][tf][li1]e$");
-            if (name=="retreat") return Label("end",text) || NearLabel(s,"surrender");
-            if (name=="surrenderTitle") return NearLabel(s,"surrender") || Label("end",text);
+            if (name=="attack") return Regex.IsMatch(s,@"^ba[tfe][tf][li1]e$") || ButtonMatches(s,"battle") || ButtonMatches(s,"attack");
+            if (name=="next") return ButtonMatches(s,"next");
+            if (name=="end") return ButtonMatches(Clean((text??"").Replace('+','t')),"endbattle") || Regex.IsMatch(s,@"^endba[tfe][tf][li1]e$");
+            if (name=="retreat") return Label("end",text) || ButtonMatches(s,"surrender");
+            if (name=="surrenderTitle") return ButtonMatches(s,"surrender") || Label("end",text);
             if (name=="confirmSurrender") return s=="okay";
-            if (name=="launch") return Regex.IsMatch(text??"",@"\battack\b",RegexOptions.IgnoreCase);
-            if (name=="find") return NearLabel(s,"findamatch") || NearLabel(s,"findmatch") || (s.Contains("find") && s.Contains("battle"));
-            return NearLabel(s,"return") || s.Contains("returnhome") || s.Contains("returntohome");
+            if (name=="launch") return ButtonMatches(s,"attack");
+            if (name=="find") return ButtonMatches(s,"findamatch") || ButtonMatches(s,"findmatch") || ButtonMatches(s,"findbattle");
+            return ButtonMatches(s,"return") || ButtonMatches(s,"returnhome") || ButtonMatches(s,"returntohome");
+        }
+        static bool ButtonMatches(string value,string expected) {
+            // Compare the complete label in its button-specific ROI, ignoring price digits.
+            string letters=Regex.Replace(value,"[^a-z]","");
+            return NearLabel(value,expected) || TextSimilarity(letters,expected)>=.80;
+        }
+        public static double TextSimilarity(string value,string expected) {
+            value=Clean(value);expected=Clean(expected);int length=Math.Max(value.Length,expected.Length);
+            return length==0?0:1.0-EditDistance(value,expected)/(double)length;
+        }
+        static int EditDistance(string value,string expected) {
+            int[] previous=Enumerable.Range(0,expected.Length+1).ToArray(),current=new int[expected.Length+1];
+            for(int i=1;i<=value.Length;i++) {
+                current[0]=i;for(int j=1;j<=expected.Length;j++)current[j]=Math.Min(Math.Min(current[j-1]+1,previous[j]+1),previous[j-1]+(value[i-1]==expected[j-1]?0:1));
+                int[] swap=previous;previous=current;current=swap;
+            }
+            return previous[expected.Length];
         }
         public static bool NearLabel(string value,string expected) {
-            if(Math.Abs(value.Length-expected.Length)>1) return false;
-            int i=0,j=0,edits=0;
-            while(i<value.Length && j<expected.Length) {
-                if(value[i]==expected[j]) { i++;j++;continue; }
-                if(++edits>1) return false;
-                if(value.Length>=expected.Length) i++;
-                if(expected.Length>=value.Length) j++;
-            }
-            return edits+(value.Length-i)+(expected.Length-j)<=1;
+            return Math.Abs(value.Length-expected.Length)<=1 && EditDistance(value,expected)<=1;
         }
         public static Vec Locate(string name,IEnumerable<OcrLine> lines,Rectangle roi) {
             var all=lines.ToList();
             var candidates=all.Where(l=>Label(name,l.Text)).ToList();
             if (name=="find" && candidates.Count==0) {
                 foreach(OcrLine a in all) foreach(OcrLine b in all) {
-                    if(a==b || !Clean(a.Text).Contains("find") || !Clean(b.Text).Contains("match")) continue;
+                    if(a==b || !Clean(a.Text).StartsWith("find") || !Label("find",a.Text+" "+b.Text)) continue;
                     if(Math.Abs((a.X+a.Width/2)-(b.X+b.Width/2))>180 || Math.Abs(a.Y-b.Y)>130) continue;
                     double left=Math.Min(a.X,b.X),top=Math.Min(a.Y,b.Y);
                     candidates.Add(new OcrLine{Text=a.Text+" "+b.Text,X=left,Y=top,Width=Math.Max(a.X+a.Width,b.X+b.Width)-left,Height=Math.Max(a.Y+a.Height,b.Y+b.Height)-top});
@@ -1049,12 +1085,16 @@ namespace ClashPekkas {
             using(var stream=new MemoryStream(bytes)) using(var image=new Bitmap(stream)) return new Bitmap(image);
         }
         public void Tap(int x,int y) { Text("shell input tap "+x+" "+y); }
+        public void Swipe(int x1,int y1,int x2,int y2,int durationMs) {
+            if(x1<0 || y1<0 || x2<0 || y2<0 || durationMs<100 || durationMs>1000)throw new Exception("Invalid Android swipe.");
+            Text("shell input swipe "+x1+" "+y1+" "+x2+" "+y2+" "+durationMs);
+        }
         public static int AndroidKeyCode(Keys key) {
             switch(key){case Keys.D1:return 8;case Keys.A:return 29;case Keys.Z:return 54;case Keys.Q:return 45;case Keys.W:return 51;case Keys.E:return 33;case Keys.R:return 46;default:throw new Exception("Unsupported Android selection key.");}
         }
         public void Key(Keys key) {Text("shell input keyevent "+AndroidKeyCode(key));}
     }
-    public sealed class AndroidGame : CapturedGame,ISupportGame {
+    public sealed class AndroidGame : CapturedGame,ISupportGame,ISwipeGame {
         readonly bool google;protected override bool GoogleLayout {get{return google;}}
         protected override bool DeveloperLayout {get{return google;}}
         readonly AdbClient client;readonly IntPtr window;Size resolution;DateTime checkedApp;
@@ -1087,6 +1127,11 @@ namespace ClashPekkas {
         }
         public override void PressKey(Keys key) {if(!google)throw new NotSupportedException("BlueStacks uses card taps.");Guard();client.Key(key);}
         public bool TrySelectSupport(Keys key) {if(!google)return false;PressKey(key);return true;}
+        public void Swipe(Vec from,Vec to,int durationMs) {
+            Guard();if(resolution==Size.Empty)throw new Exception("Read the Android screen before swiping.");
+            foreach(Vec point in new[]{from,to})if(point==null || Double.IsNaN(point.X) || Double.IsNaN(point.Y) || point.X<.25 || point.X>.75 || point.Y<.25 || point.Y>.70)throw new Exception("Swipe must stay in the central battlefield away from buttons.");
+            client.Swipe((int)Math.Round(from.X*(resolution.Width-1)),(int)Math.Round(from.Y*(resolution.Height-1)),(int)Math.Round(to.X*(resolution.Width-1)),(int)Math.Round(to.Y*(resolution.Height-1)),durationMs);
+        }
     }
     public static class PlayerWindows {
         public static bool IsMain(string title,int width,int height,bool owned) {
@@ -1138,6 +1183,7 @@ namespace ClashPekkas {
         readonly NumericUpDown openingDepth=new NumericUpDown(),laterDepth=new NumericUpDown(),fourSidesDepth=new NumericUpDown();
         readonly Label openingDepthLabel=new Label(),laterDepthLabel=new Label();
         readonly CheckBox supportUnits=new CheckBox();
+        readonly CheckBox randomSwipes=new CheckBox();
         ICapturedGame game; Runner runner; DateTime countdown; int requested; bool positionsOnly,useBackground;
         IntPtr target; bool inTick; string titleState="Ready";
         public bool IsBusy { get { return countdown!=DateTime.MinValue || (runner!=null && runner.Active); } }
@@ -1240,11 +1286,13 @@ namespace ClashPekkas {
             foreach(Control control in new Control[]{battleCount,startButton,stopButton,connectionHint,status,detailsButton,details,log}) control.Top+=80;
             foreach(Control control in Controls) if(control is Label && control.Text=="Battles") control.Top+=80;
             log.Height-=80;
+            randomSwipes.Name="randomSwipes";randomSwipes.Text="Random swipes (ADB)";randomSwipes.AutoSize=true;randomSwipes.Location=new Point(280,588);randomSwipes.Checked=settings.RandomSwipes;Controls.Add(randomSwipes);
             Write("Ready. Start from your main village. "+connectionHint.Text);
             Write("Use the first troop card only. Deployment, troop/spell counts, duration, and loot targets are configurable above. Unreadable loot after three attempts attacks the current base.");
             foreach(var input in new[]{troopCount,spellCount,durationSeconds,goldMinimum,elixirMinimum,darkMinimum,battleCount,openingDepth,laterDepth,fourSidesDepth}) input.ValueChanged+=delegate {if(!IsBusy) Safely(SaveInputs);};
             deploymentSelector.SelectedIndexChanged+=delegate {if(!IsBusy) Safely(SaveInputs);};
             supportUnits.CheckedChanged+=delegate {if(!IsBusy) Safely(SaveInputs);};
+            randomSwipes.CheckedChanged+=delegate {if(!IsBusy) Safely(SaveInputs);};
             SyncControls();
             timer.Interval=40;timer.Tick+=Tick;timer.Start();
             FormClosing+=delegate { if(IsBusy) Finish("App closed. Run stopped.",false);ReleaseGame(); };
@@ -1260,6 +1308,7 @@ namespace ClashPekkas {
             nextSettings.Platform=platformSelector.SelectedIndex==1?"GooglePlayGames":"BlueStacks";
             nextSettings.DeploymentMode=deploymentSelector.SelectedIndex==1?"FourSides":"LShape";nextSettings.Spells=(int)spellCount.Value;
             nextSettings.DeploySiegeAndFirstHero=supportUnits.Checked;
+            nextSettings.RandomSwipes=randomSwipes.Checked;
             nextSettings.LShapeOpeningDepthPercent=(int)openingDepth.Value;nextSettings.LShapeLaterDepthPercent=(int)laterDepth.Value;nextSettings.FourSidesSpellDepthPercent=(int)fourSidesDepth.Value;
             nextSettings.Troops=(int)troopCount.Value;nextSettings.Battles=(int)battleCount.Value;nextSettings.AttackDurationSeconds=(int)durationSeconds.Value;
             nextSettings.MinGold=(long)goldMinimum.Value;nextSettings.MinElixir=(long)elixirMinimum.Value;nextSettings.MinDarkElixir=(long)darkMinimum.Value;nextSettings.FilterLoot=true;nextSettings.Validate();
@@ -1279,6 +1328,7 @@ namespace ClashPekkas {
             laterDepth.Enabled=enabled && !four && spellCount.Value>6;
             openingDepthLabel.Enabled=enabled;laterDepthLabel.Enabled=laterDepth.Enabled;
             supportUnits.Enabled=!IsBusy && settings.GooglePlay;
+            randomSwipes.Enabled=!IsBusy && AdbClient.Enabled(settings);
         }
         void SetConnectionHint() {
             connectionHint.Text=settings.GooglePlay ? "Google Developer ADB: background control. Emulator can stay minimized; keep it running." : AdbClient.Enabled(settings) ? "Local ADB enabled: Start will connect for background control. Keep BlueStacks running." : "Desktop control: keep BlueStacks active. Local ADB enables background control.";
@@ -1311,7 +1361,7 @@ namespace ClashPekkas {
             UpdateWindowTitle();
         }
         static string TaskbarActivity(string state) {
-            if(state=="Home") return "On home";
+            if(state=="Home" || state=="Home swipes") return "On home";
             if(state=="Return home" || state=="Search home" || state=="Search return") return "Returning home";
             if(state=="Navigation recovery" || state=="Recover search") return "Recovering search";
             if(state=="Ending attack" || state=="Exit battle") return "Ending battle";
@@ -1342,6 +1392,7 @@ namespace ClashPekkas {
             Write(settings.FourSides ? "Spell depth: "+settings.FourSidesSpellDepthPercent+"% from troop lines toward center." : "Spell depths: opening "+settings.LShapeOpeningDepthPercent+"%, later "+settings.LShapeLaterDepthPercent+"% from troop lines toward center.");
             if(settings.GooglePlay) Write("Selection uses the game's default keys: 1 for the first troop, A for the first spell. Load the intended troop and Haste in those first slots.");
             Write("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+". Disabled actions are skipped.");
+            if(settings.RandomSwipes && useBackground)Write("Random swipes enabled: 2-5 seconds after deployment finishes, then 1-2 home swipes 1-2 seconds apart.");
             if(!useBackground) activatePlayer(target);
         }
         void Finish(string reason,bool alreadyLogged) {
@@ -1381,6 +1432,7 @@ namespace ClashPekkas {
             if(state=="Navigation recovery") return "Recovering home for a scanned navigation retry...";
             if(state=="Exit battle" || state=="Ending attack") return "Ending the timed attack and confirming Okay...";
             if(state=="Home") return "Looking for Battle on your main village...";
+            if(state=="Home swipes") return "Sending one or two home swipes before continuing...";
             if(state=="Find match") return "Looking for Find a Match...";
             if(state=="Army") return "Confirming Attack on the army screen...";
             if(state=="Scouting") return "Waiting for the opponent's base...";

@@ -18,6 +18,7 @@
   "MinDarkElixir": 0,
   "AttackDurationSeconds": 90,
   "UseSpells": true,
+  "RandomSwipes": true,
   "Spells": 11,
   "MinSpellIntervalMs": 2000,
   "MaxSpellIntervalMs": 5000,

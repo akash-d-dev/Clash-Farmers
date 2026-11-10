@@ -36,6 +36,7 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 | Spell depth (%) | 0–100; 0 is the troop deployment line and 100 is the estimated base center. Arrows step by 5; exact percentages can be typed. |
 | Siege + heroes / abilities | Google Developer mode only; enabled by default. Enables the hero, siege and ability actions in the chosen order. |
 | Action order... | Move the five actions up or down, Save or Cancel, or Reset default. Hero abilities must follow hero deployment. |
+| Random swipes (ADB) | Enabled by default for ADB control. Short gestures after all actions finish, followed by one or two home swipes. |
 | End battle after (s) | 3–180 seconds from the first troop placement, randomized by ±5 seconds and clamped to 3–180 |
 | Gold / Elixir / Dark elixir min | 0–99,999,999 each; zero disables that resource check |
 
@@ -54,6 +55,8 @@ BlueStacks uses local ADB when enabled and otherwise uses desktop control. ADB d
 Stop with F9, Esc, or the Stop button. F9/Esc are global, including while working in another app. Stop is enabled only while busy. Cancellation prevents further troop, spell, or exit clicks after any current ADB command returns. Start begins a new run; internal recovery is available for a specifically restored counter/stage.
 
 The window/taskbar title shows the activity first, followed by remaining battles and completed/total, for example `Searching | 20 left (10/30) - Clash Farmer`. The remaining count includes an attack in progress. Titles cover starting, home, searching, battle running, ending, returning home, recovery, stopped, and finished. Updates do not activate the app or interrupt the game. Windows must have taskbar labels enabled to show the full title directly; otherwise hover over the app's taskbar icon to read it.
+
+With Random swipes enabled, ADB sends a short gesture at a random 2–5 second interval after the complete configured action sequence has finished. Each gesture stays in the central battlefield away from HUD buttons. Before sending it, the runner checks that a battle is still visible and no exit dialog is open. Natural results, the cutoff and Stop cancel further battle gestures. Once home is verified, it sends one or two swipes, waiting 1–2 seconds before each, then continues to the next battle. The final battle also receives its home swipes before finishing. Skipped scouting bases do not receive home gestures. The checkbox is locked while running and unavailable in desktop control mode; advanced settings store it as `RandomSwipes`. Swipe intervals are measured after the previous gesture completes, and OCR/input overhead can add a small delay. Set troop and spell counts to the intended full stacks, since gestures over the battlefield can interact with units still selected if inventory remains.
 
 ## Deployment and spells
 
@@ -84,6 +87,8 @@ A short attack duration cancels pending spells. A natural result ends deployment
 Only positive resource thresholds are read and checked. All enabled thresholds must pass; exact threshold values qualify. With all three set to zero, loot OCR is bypassed and the first verified opponent is attacked.
 
 Loot readings must agree across image sizes and repeat consistently before comparison. Developer Edition crops include extra left margin and white padding so a thin leading digit is less likely to be omitted. OCR digit counts must also match the visible digit shapes; repeated six-digit reads are rejected when seven digit shapes are present. Below-target bases get Next and do not count as completed battles. After three unreadable attempts, the current base is attacked with unverified loot, as requested. The failure counter resets for the next opponent. The log explicitly distinguishes accepted loot, below-target skips, and unreadable-loot attacks. The reader uses available loot on the left, not your storage on the right.
+
+Navigation compares the complete expected button phrase using normalized edit-distance similarity, accepting at least 80% similarity alongside existing short-label aliases. Case, punctuation and price digits are ignored for fuzzy comparisons. For example, `FiNd a Mate` matches `Find a Match`. Button-specific screen regions, coordinate limits, repeated observations and rejection of multiple candidate buttons remain in place; unrelated labels such as Join Tournament and Cancel are not accepted. The Okay confirmation remains exact and is only used with the recognized exit dialog.
 
 The cutoff is sampled once when the first army troop placement is sent; hero and siege setup time does not count and the timer is not restarted when the army finishes. At the deadline, the runner stops remaining troop placements, queued abilities and spells, recognizes either Surrender or End Battle, clicks it, then recognizes the matching dialog and clicks Okay. A short cutoff can therefore end before the full army is deployed. Both button types can require confirmation. Natural results take priority. Unknown dialogs are not accepted. Results are counted only after returning home. Stop remains available throughout.
 

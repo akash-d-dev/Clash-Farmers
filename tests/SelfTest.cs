@@ -4,7 +4,7 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 namespace ClashPekkas {
-    public sealed class FakeGame : IGame,ISupportGame {
+    public class FakeGame : IGame,ISupportGame {
         public bool SiegeAvailable,HeroAvailable;public int SiegeDeployments,HeroDeployments;
         public bool FlexibleActions;
         public readonly List<Vec> SupportPoints=new List<Vec>();
@@ -74,6 +74,20 @@ namespace ClashPekkas {
             else throw new Exception("Unexpected click");
         }
     }
+    public sealed class SwipeFakeGame : FakeGame,ISwipeGame {
+        public readonly List<DateTime> BattleSwipeTimes=new List<DateTime>(),HomeSwipeTimes=new List<DateTime>();
+        public readonly List<int> HomeSwipeBattles=new List<int>();
+        public readonly List<int> BattleSwipeBattles=new List<int>();
+        public readonly List<Vec> SwipeStarts=new List<Vec>(),SwipeEnds=new List<Vec>();
+        public readonly List<int> SwipeDurations=new List<int>();
+        public int FinishAfterSwipes;
+        public void Swipe(Vec from,Vec to,int durationMs) {
+            Guard();SwipeStarts.Add(from);SwipeEnds.Add(to);SwipeDurations.Add(durationMs);
+            if(Screen=="home"){HomeSwipeTimes.Add(Now);HomeSwipeBattles.Add(ReturnClicks);return;}
+            if(Screen!="fighting" && Screen!="battle" && Screen!="spells")throw new Exception("Swipe outside home or live battle");
+            BattleSwipeTimes.Add(Now);BattleSwipeBattles.Add(ReturnClicks+1);if(FinishAfterSwipes>0 && BattleSwipeTimes.Count>=FinishAfterSwipes)Screen="result";
+        }
+    }
     public static class Tests {
         static void Assert(bool ok,string name) { if(!ok) throw new Exception("TEST FAILED: "+name); }
         static IEnumerable<string[]> Orders(string[] remaining) {
@@ -89,6 +103,30 @@ namespace ClashPekkas {
         }
         public static string Run() {
             Settings settings=new Settings{FastNavigation=false};var logs=new List<string>();DateTime now=new DateTime(2026,1,1);
+            var swipeGame=new SwipeFakeGame{LongBattle=true};var completeTimes=new Dictionary<int,DateTime>();var homeReadyTimes=new Dictionary<int,DateTime>();
+            Action<string> swipeLog=line=>{if(line.StartsWith("Configured action order complete"))completeTimes[swipeGame.ReturnClicks+1]=swipeGame.Now;if(line.StartsWith("Waiting: Home swipes"))homeReadyTimes[swipeGame.ReturnClicks]=swipeGame.Now;};
+            var swipeRunner=new Runner(swipeGame,new Settings{AttackDurationSeconds=60},2,false,swipeLog,new Random(4));swipeRunner.Start(now);
+            for(int t=0;t<12000 && swipeRunner.Active;t++){swipeGame.Now=now.AddMilliseconds(t*50);swipeRunner.Tick(swipeGame.Now);}
+            Assert(swipeRunner.Completed==2 && swipeGame.Deployments==50 && swipeGame.SpellCasts==22 && swipeGame.HomeClicks==2,"random swipes preserve battle and unit counts");
+            Assert(swipeGame.BattleSwipeTimes.Count>0,"swipes occur while a completed deployment waits for the battle cutoff");
+            for(int battle=1;battle<=2;battle++) {
+                var battleTimes=swipeGame.BattleSwipeTimes.Where((time,index)=>swipeGame.BattleSwipeBattles[index]==battle).ToArray();
+                for(int i=0;i<battleTimes.Length;i++){double gap=(battleTimes[i]-(i==0?completeTimes[battle]:battleTimes[i-1])).TotalSeconds;Assert(gap>=2 && gap<=5.1,"battle swipe interval is 2-5 seconds after the full sequence");}
+                var homeTimes=swipeGame.HomeSwipeTimes.Where((time,index)=>swipeGame.HomeSwipeBattles[index]==battle).ToArray();Assert(homeTimes.Length>=1 && homeTimes.Length<=2,"one or two home swipes per completed battle including the final battle");
+                for(int i=0;i<homeTimes.Length;i++){double gap=(homeTimes[i]-(i==0?homeReadyTimes[battle]:homeTimes[i-1])).TotalSeconds;Assert(gap>=1 && gap<=2.1,"home swipes are 1-2 seconds apart before navigation");}
+            }
+            for(int i=0;i<swipeGame.SwipeStarts.Count;i++) {
+                foreach(Vec p in new[]{swipeGame.SwipeStarts[i],swipeGame.SwipeEnds[i]})Assert(p.X>=.25 && p.X<=.75 && p.Y>=.25 && p.Y<=.70,"swipe path stays away from HUD buttons");
+                double distance=Plan.PixelDistance(swipeGame.SwipeStarts[i],swipeGame.SwipeEnds[i]);Assert(distance>=120 && distance<=200 && swipeGame.SwipeDurations[i]>=180 && swipeGame.SwipeDurations[i]<=320,"swipes use bounded lengths and durations");
+            }
+            foreach(string stopping in new[]{"battle","home","disabled","natural"}) {
+                var testGame=new SwipeFakeGame{LongBattle=true,FinishAfterSwipes=stopping=="natural"?2:0};
+                var testRunner=new Runner(testGame,new Settings{RandomSwipes=stopping!="disabled",AttackDurationSeconds=60},1,false,line=>{},new Random(2));testRunner.Start(now);
+                for(int t=0;t<10000 && testRunner.Active;t++){testGame.Now=now.AddMilliseconds(t*50);testRunner.Tick(testGame.Now);if(stopping=="battle" && testRunner.State=="Result" || stopping=="home" && testRunner.State=="Home swipes")break;}
+                if(stopping=="battle" || stopping=="home"){int count=testGame.SwipeStarts.Count;testRunner.Stop("Stop during swipe wait");testRunner.Tick(now.AddHours(1));Assert(testGame.SwipeStarts.Count==count,"Stop cancels all pending battle/home swipes");}
+                if(stopping=="disabled")Assert(testRunner.Completed==1 && testGame.SwipeStarts.Count==0,"random swipes can be disabled");
+                if(stopping=="natural")Assert(testRunner.Completed==1 && testGame.BattleSwipeTimes.Count==2 && testGame.EndClicks==0,"natural results stop battle swipes before returning home");
+            }
             var game=new FakeGame();var runner=new Runner(game,settings,10,false,logs.Add,new Random(3));runner.Start(now);
             for(int t=0;t<5000 && runner.Active;t++) runner.Tick(now.AddMilliseconds(t*300));
             Assert(!runner.Active && runner.Completed==10,"ten battles finish");
@@ -468,6 +506,10 @@ namespace ClashPekkas {
             Assert(Vision.Label("attack","'Baetie") && Vision.Label("attack","BattiE") && !Vision.Label("attack","Battle ends in") && !Vision.Label("attack","Ranked Battle"),"common home-button font confusions accepted without matching battle screen labels");
             Assert(Vision.Label("return","R TURN -") && !Vision.Label("return","Okay"),"observed Google Return OCR with missing e is accepted in the results-only button crop");
             Assert(Vision.Label("find","FiNd a Matcx") && !Vision.Label("find","Join Tournament"),"observed Find a Match OCR error accepted without selecting ranked button");
+            Assert(Vision.Label("find","FiNd a Mate") && Vision.Label("find","Find a Macth") && Vision.Label("find","FiNd a Mate 1500 0"),"80-percent button matching accepts observed missing/misread letters and ignores price");
+            Assert(Vision.TextSimilarity("findamate","findamatch")>=.8 && !Vision.Label("find","Find a Player") && !Vision.Label("find","Edit Army") && !Vision.Label("find","Next"),"fuzzy labels remain bounded to the full expected phrase");
+            Assert(Vision.Locate("find",new[]{new OcrLine{Text="FiNd a Mate",X=100,Y=20,Width=150,Height=30}},Vision.Region("find"))!=null,"fuzzy match maps to the known Find a Match button region");
+            Assert(Vision.Locate("find",new[]{new OcrLine{Text="Find a",X=100,Y=20,Width=100,Height=25},new OcrLine{Text="Mate",X=110,Y=50,Width=80,Height=25}},Vision.Region("find"))!=null,"split label lines use the same tolerant comparison");
             Assert(Vision.Label("launch","Attack!") && !Vision.Label("launch","Boost Army") && !Vision.Label("launch","Battle"),"army confirmation recognizes only Attack");
             Assert(AdbClient.ValidSerial("127.0.0.1:5555") && !AdbClient.ValidSerial("192.168.1.20:5555") && !AdbClient.ValidSerial("127.0.0.1:99999") && !AdbClient.ValidSerial("127.0.0.1:5555 shell"),"ADB only accepts a valid loopback endpoint");
             Assert(AdbClient.ValidSerial("emulator-5554") && !AdbClient.ValidSerial("emulator-5554 shell") && !AdbClient.ValidSerial("emulator-99999"),"registered local emulator serial accepted without shell arguments");
