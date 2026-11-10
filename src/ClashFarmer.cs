@@ -568,6 +568,24 @@ namespace ClashPekkas {
             } finally { result.UnlockBits(locked); }
             return result;
         }
+        public static int LootDigitCount(Bitmap mask) {
+            int w=mask.Width,h=mask.Height;var ink=new bool[w*h];var seen=new bool[w*h];var columns=new bool[w];
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++)ink[y*w+x]=mask.GetPixel(x,y).R<128;
+            var queue=new Queue<int>();var neighbours=new[]{-1,1,-w,w};
+            for(int start=0;start<ink.Length;start++) {
+                if(!ink[start] || seen[start])continue;
+                int left=w,right=0,top=h,bottom=0;seen[start]=true;queue.Enqueue(start);
+                while(queue.Count>0) {
+                    int i=queue.Dequeue(),x=i%w,y=i/w;left=Math.Min(left,x);right=Math.Max(right,x);top=Math.Min(top,y);bottom=Math.Max(bottom,y);
+                    foreach(int delta in neighbours){int next=i+delta;if(next<0 || next>=ink.Length || (delta==-1 && x==0) || (delta==1 && x==w-1) || seen[next] || !ink[next])continue;seen[next]=true;queue.Enqueue(next);}
+                }
+                // Ignore small background flecks and the resource icon touching the crop edge.
+                if(left==0 || right==w-1 || bottom-top+1<h*.4 || right-left+1<h*.06 || right-left+1>h*1.5)continue;
+                for(int x=left;x<=right;x++)columns[x]=true;
+            }
+            int count=0;for(int x=0;x<w;x++)if(columns[x] && (x==0 || !columns[x-1]))count++;
+            return count;
+        }
         public static void DrawPlan(Bitmap canvas,Settings settings) {
             using(Graphics g=Graphics.FromImage(canvas)) using(Font font=new Font("Segoe UI",12,FontStyle.Bold)) {
                 g.SmoothingMode=SmoothingMode.AntiAlias;
@@ -756,9 +774,20 @@ namespace ClashPekkas {
                 var attempts=new List<string>();
                 foreach(int scale in new[]{2,4,3,5,1}) {
                     using(Bitmap enlarged=Vision.Resize(crop,crop.Width*scale,crop.Height*scale)) using(Bitmap mask=Vision.WhiteDigits(enlarged,developer)) {
-                        OcrLine[] lines=ReadImage(mask);var values=new List<long>();
+                        int digits=developer?Vision.LootDigitCount(mask):0;
+                        OcrLine[] lines;
+                        if(developer) {
+                            using(Bitmap padded=new Bitmap(mask.Width+40,mask.Height+20)) {
+                                using(Graphics graphics=Graphics.FromImage(padded)){graphics.Clear(Color.White);graphics.DrawImageUnscaled(mask,20,10);}
+                                lines=ReadImage(padded);
+                            }
+                        }else lines=ReadImage(mask);
+                        var values=new List<long>();
                         attempts.Add(scale+"x: "+String.Join(" | ",lines.Select(l=>l.Text)));
-                        foreach(OcrLine line in lines) { long parsed;if(Vision.TryLootNumber(line.Text,out parsed)) values.Add(parsed); }
+                        foreach(OcrLine line in lines) { long parsed;if(Vision.TryLootNumber(line.Text,out parsed)) {
+                            if(developer && (digits==0 || parsed.ToString(CultureInfo.InvariantCulture).Length!=digits)) {attempts.Add("visible digit count "+digits+" disagrees with "+parsed);continue;}
+                            values.Add(parsed);
+                        } }
                         values=values.Distinct().ToList();
                         if(values.Count==1) {
                             votes.Add(values[0]);
@@ -778,7 +807,7 @@ namespace ClashPekkas {
             Rectangle goldRegion=googlePlay ? new Rectangle(65,94,220,32) : Vision.GoldLoot;
             Rectangle elixirRegion=googlePlay ? new Rectangle(65,133,235,32) : Vision.ElixirLoot;
             Rectangle darkRegion=googlePlay?new Rectangle(65,173,235,32):new Rectangle(65,191,235,43);
-            if(developer){goldRegion=new Rectangle(65,94,150,26);elixirRegion=new Rectangle(65,133,150,26);darkRegion=new Rectangle(65,173,150,26);}
+            if(developer){goldRegion=new Rectangle(57,94,158,26);elixirRegion=new Rectangle(57,133,158,26);darkRegion=new Rectangle(57,173,158,26);}
             bool goldOk=!readGold || LootValue(image,goldRegion,"gold",out gold,developer),elixirOk=!readElixir || LootValue(image,elixirRegion,"elixir",out elixir,developer),darkOk=!readDark || LootValue(image,darkRegion,"dark-elixir",out dark,developer);
             return goldOk && elixirOk && darkOk ? new LootReading(gold,elixir,dark) : null;
         }

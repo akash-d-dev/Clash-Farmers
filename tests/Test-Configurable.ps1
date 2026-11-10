@@ -39,6 +39,23 @@ try {
     if($null -eq $loot -or $loot.Gold -ne 701370 -or $loot.Elixir -ne 695900 -or $loot.DarkElixir -ne 6758){throw 'Developer Edition loot must use its Android screenshot coordinates.'}
     'PASS: Developer Android End Battle and all three loot values recognized.'
 }finally{$developer.Dispose()}
+$sevenPanel=[Drawing.Bitmap]::new((Join-Path $FixtureDirectory 'developer-seven-digit-panel.png'))
+$sevenFrame=[Drawing.Bitmap]::new(1600,900);$sevenGraphics=[Drawing.Graphics]::FromImage($sevenFrame)
+try {
+    foreach($offset in @(-1,0,1)) {
+        $sevenGraphics.Clear([Drawing.Color]::Black);$sevenGraphics.DrawImageUnscaled($sevenPanel,$offset,0)
+        $loot=$reader.ReadLoot($sevenFrame,$true,$true,$true,$true,$true)
+        if($null -eq $loot -or $loot.Gold -ne 2015434 -or $loot.Elixir -ne 1956218 -or $loot.DarkElixir -ne 23775){throw "Seven-digit loot lost a digit with offset $offset."}
+    }
+    $sevenGraphics.Clear([Drawing.Color]::Black);$sevenGraphics.DrawImageUnscaled($sevenPanel,0,0)
+    $missingOne=[ClashPekkas.ScreenReader]::new([ClashPekkas.OcrReader]{param([byte[]]$png)'[{"Text":"956 218","X":50,"Y":10,"Width":150,"Height":35}]'},$null,$null)
+    if($null -ne $missingOne.ReadLoot($sevenFrame,$true,$false,$true,$false,$true)){throw 'Repeated truncated OCR must not pass when seven digit shapes are visible.'}
+    $script:elixirReadCalls=0
+    $recovering=[ClashPekkas.ScreenReader]::new([ClashPekkas.OcrReader]{param([byte[]]$png)$script:elixirReadCalls++;if($script:elixirReadCalls -le 2){'[{"Text":"956 218"}]'}else{'[{"Text":"1 956 218"}]'}},$null,$null)
+    $loot=$recovering.ReadLoot($sevenFrame,$true,$false,$true,$false,$true)
+    if($null -eq $loot -or $loot.Elixir -ne 1956218 -or $script:elixirReadCalls -lt 4){throw 'Reader must discard repeated missing-leading-digit results before accepting full amount.'}
+    'PASS: seven-digit screenshot reads 2,015,434 / 1,956,218; repeated missing-leading-1 OCR is rejected and recoverable.'
+}finally{$sevenGraphics.Dispose();$sevenFrame.Dispose();$sevenPanel.Dispose()}
 $field=[Drawing.Bitmap]::new(2404,1352);$g=[Drawing.Graphics]::FromImage($field)
 try{$g.DrawImageUnscaled($source,0,-32);$image=[ClashPekkas.Vision]::Resize($field,1600,900)}finally{$source.Dispose();$g.Dispose();$field.Dispose()}
 try{
