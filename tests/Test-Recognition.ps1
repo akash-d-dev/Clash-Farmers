@@ -176,6 +176,10 @@ try {
         if($form.Text -ne ($case[1]+' | 20 left (10/30) - Clash Farmer')){throw "Incorrect taskbar activity/count: $($form.Text)"}
     }
     $fake.GetType().GetProperty('Completed').GetSetMethod($true).Invoke($fake,@(30))
+    $fake.GetType().GetProperty('RecoveryAttempt').GetSetMethod($true).Invoke($fake,@(2))
+    $fake.GetType().GetProperty('State').GetSetMethod($true).Invoke($fake,@('Home recovery'))
+    $form.GetType().GetMethod('UpdateWindowTitle',$private).Invoke($form,@())
+    if($form.Text -ne 'Recovering home - attempt 2/3 | 0 left (30/30) - Clash Farmer'){throw 'Recovery taskbar title must include its attempt and unchanged counter.'}
     $form.GetType().GetMethod('Finish',$private).Invoke($form,@('Finished 30 battles.',$false))
     if($form.Text -ne 'Finished | 0 left (30/30) - Clash Farmer'){throw 'Finished title must show zero remaining.'}
     $form.DrawToBitmap($render,[Drawing.Rectangle]::new(0,0,$form.Width,$form.Height))

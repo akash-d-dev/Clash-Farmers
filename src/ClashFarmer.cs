@@ -156,7 +156,24 @@ namespace ClashPekkas {
         public readonly List<int> PointSides=new List<int>();
         public string Summary { get { return String.Join(", ",Sides.Select((side,i)=>side.Name+" "+Counts[i])); } }
     }
+    public sealed class SupportPlan {
+        public DeploymentSide[] Heroes;
+        public DeploymentSide Siege;
+        public static Vec Midpoint(DeploymentSide side) { return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2); }
+    }
     public static class Plan {
+        public static SupportPlan Support(Settings settings,bool reverse,Random random) {
+            DeploymentSide[] sides=Sides(settings,reverse);
+            if(settings.FourSides) {
+                string[] clockwise={"upper-left","upper-right","lower-right","lower-left"};
+                sides=clockwise.Select(name=>sides.Single(side=>side.Name==name)).ToArray();
+            }
+            int start=random.Next(sides.Length);
+            return new SupportPlan {
+                Heroes=Enumerable.Range(0,4).Select(i=>sides[(start+(settings.FourSides?i:i/2))%sides.Length]).ToArray(),
+                Siege=sides[random.Next(sides.Length)]
+            };
+        }
         public static int OpeningSpellCount(Settings settings) {return settings.FourSides || settings.Spells<=6 ? settings.Spells : (settings.Spells+1)/2;}
         public static DeploymentSide[] Sides(Settings settings,bool reverse,bool spells=false) {
             var sides=new List<DeploymentSide>();
@@ -243,6 +260,37 @@ namespace ClashPekkas {
     public interface ICapturedGame : IGame,IDisposable { Bitmap Capture(); }
     public interface ISupportGame { bool TrySelectSupport(Keys key); }
     public interface ISwipeGame {void Swipe(Vec from,Vec to,int durationMs);}
+    public interface IRecoveryGame {
+        NavigationObservation ObserveNavigation();
+        void Back();
+        void SaveRecovery(NavigationObservation observation,RecoveryRecord record);
+    }
+    public sealed class NavigationObservation : IDisposable {
+        public string Kind="Unknown";
+        public Vec Home,Cancel,Return,Reload;
+        public OcrLine[] Ocr=new OcrLine[0];
+        public readonly Dictionary<string,OcrLine[]> Crops=new Dictionary<string,OcrLine[]>();
+        public Bitmap Frame;
+        public void Dispose(){if(Frame!=null){Frame.Dispose();Frame=null;}}
+    }
+    public sealed class RecoveryRecord {
+        public string Reason,Origin,State;
+        public int Attempt,Completed,Total,SkippedBases,BackInputs;
+        public bool BattlePending;
+    }
+    public static class RecoveryDiagnostics {
+        public static void Save(string directory,NavigationObservation observation,RecoveryRecord record) {
+            Directory.CreateDirectory(directory);
+            string prefix=Path.Combine(directory,DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff",CultureInfo.InvariantCulture)+"-"+Guid.NewGuid().ToString("N").Substring(0,8));
+            if(observation.Frame!=null)observation.Frame.Save(prefix+".png",ImageFormat.Png);
+            File.WriteAllText(prefix+".json",new JavaScriptSerializer().Serialize(new{Context=record,Observation=observation.Kind,Ocr=observation.Ocr,Crops=observation.Crops}));
+            foreach(string path in Directory.GetFiles(directory,"*.json").Where(path=>Regex.IsMatch(Path.GetFileName(path),@"^\d{8}-\d{6}-\d{3}-[a-f0-9]{8}\.json$")).OrderByDescending(path=>Path.GetFileName(path),StringComparer.Ordinal).Skip(20)) {
+                // Only prune this method's own timestamped records, within its dedicated directory.
+                if(!Regex.IsMatch(Path.GetFileName(path),@"^\d{8}-\d{6}-\d{3}-[a-f0-9]{8}\.json$"))continue;
+                File.Delete(path);string png=Path.ChangeExtension(path,".png");if(File.Exists(png))File.Delete(png);
+            }
+        }
+    }
     public sealed class Runner {
         readonly IGame game; readonly Settings settings; readonly Random random;
         readonly Action<string> log; readonly int limit; readonly bool deployOnly;
@@ -253,6 +301,89 @@ namespace ClashPekkas {
         readonly List<Keys> pendingAbilities=new List<Keys>();int abilityIndex;
         int actionIndex;
         bool battleSwipes;DateTime swipeDue;int homeSwipesRemaining;
+        bool battlePending,skipHomeSwipes,recoveryCooling,recoverySnapshot,recoveryReloaded;
+        int recoveryBacks;string recoveryOrigin;
+        public int RecoveryAttempt {get;private set;}
+        static bool HomeState(string state) {return state=="Home" || state=="Return home" || state=="Search home" || state=="Home swipes";}
+        static bool HomeNavigation(string state) {return HomeState(state) || state=="Find match" || state=="Army" || state=="Fast verify" || state=="Navigation recovery" || state=="Search return";}
+        void CountReturnedBattle() {
+            if(!battlePending)return;
+            battlePending=false;Completed++;log("Completed battle "+Completed+"/"+limit+".");
+        }
+        void RecoveryDiagnostic(NavigationObservation observation,string reason) {
+            ((IRecoveryGame)game).SaveRecovery(observation,new RecoveryRecord{Reason=reason,Origin=recoveryOrigin,State=State,Attempt=RecoveryAttempt,Completed=Completed,Total=limit,SkippedBases=SkippedBases,BackInputs=recoveryBacks,BattlePending=battlePending});
+        }
+        void BeginHomeRecovery(DateTime now) {
+            recoveryOrigin=State;battleSwipes=false;homeSwipesRemaining=0;skipHomeSwipes=true;
+            if(RecoveryAttempt>=3){Stop("Stopped: home recovery failed after three cycles. See data/diagnostics/recovery. Progress: "+Completed+"/"+limit+".");return;}
+            RecoveryAttempt++;recoveryBacks=0;recoveryCooling=false;recoverySnapshot=true;recoveryReloaded=false;
+            Go("Home recovery",now);next=now;
+            log("Recovering home - attempt "+RecoveryAttempt+"/3 (from "+recoveryOrigin+").");
+        }
+        bool StableHome(NavigationObservation observation) {
+            Vec point=observation.Home;
+            if(observation.Kind!="Home" || point==null){stable=0;last=null;return false;}
+            if(last!=null && Math.Abs(last.X-point.X)<.015 && Math.Abs(last.Y-point.Y)<.015)stable++;else stable=1;
+            last=point;return stable>=2;
+        }
+        void HomeTick(DateTime now,Stopwatch clock) {
+            using(NavigationObservation observation=((IRecoveryGame)game).ObserveNavigation()) {
+                if(!StableHome(observation)) {next=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds)+500);return;}
+                if(State=="Return home") {
+                    CountReturnedBattle();battleDeadline=DateTime.MinValue;
+                    if(SwipesEnabled && !skipHomeSwipes){homeSwipesRemaining=random.Next(1,3);Go("Home swipes",now);next=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds)+random.Next(1000,2001));return;}
+                }
+                if(State=="Home swipes") {
+                    if(homeSwipesRemaining>0) {
+                        SendSwipe("Home",now);homeSwipesRemaining--;stable=0;last=null;
+                        // Verify the village after every gesture, including the final one.
+                        entered=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
+                        next=entered.AddMilliseconds(homeSwipesRemaining>0?random.Next(1000,2001):500);return;
+                    }
+                }
+                if(Completed>=limit){Stop("Finished "+Completed+" battles. Stopped at home.");return;}
+                ResetLoot();battleDeadline=DateTime.MinValue;OpenFromHome(observation.Home,now);
+                next=next.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
+            }
+        }
+        void RecoveryTick(DateTime now,Stopwatch clock) {
+            if(recoveryCooling){RecoveryAttempt++;recoveryBacks=0;recoveryCooling=false;recoverySnapshot=true;recoveryReloaded=false;entered=now;stable=0;last=null;log("Recovering home - attempt "+RecoveryAttempt+"/3.");}
+            using(NavigationObservation observation=((IRecoveryGame)game).ObserveNavigation()) {
+                if(recoverySnapshot){RecoveryDiagnostic(observation,"entry");recoverySnapshot=false;}
+                DateTime observedAt=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
+                if(observation.Kind=="Scouting") {log("Recovery found scouting; resuming loot checks.");ResetLoot();Go("Scouting",observedAt);return;}
+                if(observation.Kind=="Battle" || observation.Kind=="Battle exit") {log("Recovery found an active battle; no Back input sent.");Go(observation.Kind=="Battle exit"?"Exit battle":"Result",observedAt);return;}
+                if(observation.Kind=="Results") {log("Recovery found results; resuming return home.");Go(battlePending?"Result":"Search return",observedAt);return;}
+                if(StableHome(observation)) {
+                    CountReturnedBattle();battleDeadline=DateTime.MinValue;
+                    if(Completed>=limit){Stop("Finished "+Completed+" battles. Stopped at home.");return;}
+                    log("Home recovered. Skipping remaining home swipes and using scanned navigation.");
+                    scannedNavigation=true;ResetLoot();OpenFromHome(observation.Home,observedAt);return;
+                }
+                // A first clean-home observation needs confirmation, not a Back key.
+                bool expired=(observedAt-entered).TotalSeconds>=30;
+                if(expired || (recoveryBacks>=5 && observation.Kind!="Exit dialog" && observation.Kind!="Home")) {
+                    RecoveryDiagnostic(observation,"cycle failed");
+                    if(RecoveryAttempt>=3){Stop("Stopped: home recovery failed after three cycles. See data/diagnostics/recovery. Progress: "+Completed+"/"+limit+".");return;}
+                    recoveryCooling=true;next=observedAt.AddSeconds(2);stable=0;last=null;return;
+                }
+                if(observation.Kind=="Inactivity dialog") {
+                    if(observation.Reload!=null && !recoveryReloaded){game.Click(observation.Reload);recoveryReloaded=true;log("Recovery reloading the game after its recognized inactivity disconnect.");}
+                    next=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds)+2000);return;
+                }
+                if(observation.Kind=="Loading" || (recoveryReloaded && observation.Kind=="Unknown")) {
+                    // Reloading can briefly show a blank frame before the loading
+                    // label appears. Back during this transition can open Exit.
+                    next=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds)+1000);return;
+                }
+                if(observation.Kind=="Exit dialog" && observation.Cancel!=null) {
+                    game.Click(observation.Cancel);log("Recovery cancelled Confirm Exit; the game stays open.");
+                }else if(observation.Kind!="Home" && recoveryBacks<5) {
+                    ((IRecoveryGame)game).Back();recoveryBacks++;log("Recovery Android Back "+recoveryBacks+"/5.");
+                }
+                next=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds)+1000);
+            }
+        }
         bool SwipesEnabled {get{return settings.RandomSwipes && game is ISwipeGame && !deployOnly;}}
         void SendSwipe(string stage,DateTime now) {
             double angle=random.NextDouble()*Math.PI*2,distance=120+random.NextDouble()*80;
@@ -286,10 +417,10 @@ namespace ClashPekkas {
             settings.Validate(); if (limit<1 || limit>30) throw new Exception("Battle limit must be 1-30.");
             this.game=game; this.settings=settings; this.limit=limit; this.deployOnly=deployOnly; this.log=log; this.random=random;
         }
-        public void Start(DateTime now) { Active=true; Completed=0;SkippedBases=0;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
+        public void Start(DateTime now) { Active=true; Completed=0;SkippedBases=0;RecoveryAttempt=0;battlePending=false;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
         public void ResumeExistingBattle(DateTime now,int completed,bool searching=false) {
             if(completed<0 || completed>=limit) throw new Exception("Invalid completed battle count for recovery.");
-            Active=true;Completed=completed;SkippedBases=0;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
+            Active=true;Completed=completed;SkippedBases=0;RecoveryAttempt=0;battlePending=!searching;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
         }
         void ResetLoot() { previousLoot=null;lootFailures=0;lootConfirmations=0; }
         void SkipBase(Vec nextButton,DateTime now,string reason) {
@@ -343,6 +474,12 @@ namespace ClashPekkas {
                     log("Battle duration reached from the first troop placement. Cancelling remaining deployment, abilities and spells.");Go("Ending attack",now);next=now;
                 }
                 if (now<next) return;
+                if(!deployOnly && game is IRecoveryGame) {
+                    if(HomeNavigation(State) && (now-entered).TotalSeconds>=8)BeginHomeRecovery(now);
+                    if(!Active)return;
+                    if(State=="Home recovery"){RecoveryTick(now,tickClock);return;}
+                    if(HomeState(State)){HomeTick(now,tickClock);return;}
+                }
                 double timeout=(State=="Result" || State=="Spells" || State=="Deploying" || State.StartsWith("Recover")) ? 260 : State=="Scouting" ? 120 : 45;
                 if ((now-entered).TotalSeconds>timeout) { Stop("Stopped: timed out on "+State+". No further clicks."); return; }
                 Vec point;
@@ -379,7 +516,7 @@ namespace ClashPekkas {
                 else if (State=="Find match" && Ready("find",out point)) { game.Click(point); Go("Army",now); }
                 else if (State=="Army" && Ready("launch",out point)) { game.Click(point); Go("Scouting",now); }
                 else if (State=="Scouting" && Ready("next",out point)) {
-                    scannedNavigation=false;
+                    scannedNavigation=false;RecoveryAttempt=0;skipHomeSwipes=false;
                     if(settings.FilterLoot && !AcceptLoot(point,now)) return;
                     Vec troopCard=settings.GooglePlay ? null : game.FirstTroopCard();troopCardPoint=troopCard;
                     if (!settings.GooglePlay && troopCard==null) { Stop("Stopped: first troop card is not available. Load troops in the first slot before starting."); return; }
@@ -387,9 +524,10 @@ namespace ClashPekkas {
                     if(settings.UseSpells && settings.Spells>0 && !spellsAvailable) log("Haste card not recognized before deployment. Spells will be skipped for this battle.");
                     bool reverse=random.Next(2)==1;reverseAttack=reverse;spellsCast=0;spellHistory.Clear();
                     PlacementPlan troopLayout=Plan.Troops(settings,reverse,random);plan=troopLayout.Points;deployed=0;
-                    DeploymentSide firstSide=troopLayout.Sides[Array.FindIndex(troopLayout.Counts,count=>count>0)];
-                    supportPoint=new Vec((firstSide.A.X+firstSide.B.X)/2,(firstSide.A.Y+firstSide.B.Y)/2);
-                    heroIndex=0;abilityIndex=0;actionIndex=0;battleSwipes=false;homeSwipesRemaining=0;pendingAbilities.Clear();troopsFinished=DateTime.MinValue;battleDeadline=DateTime.MinValue;heroPoints=Enumerable.Range(0,4).Select(i=>{DeploymentSide side=troopLayout.Sides[settings.FourSides?i:i/2];return new Vec((side.A.X+side.B.X)/2,(side.A.Y+side.B.Y)/2);}).ToArray();
+                    battlePending=true;
+                    SupportPlan support=Plan.Support(settings,reverse,random);supportPoint=SupportPlan.Midpoint(support.Siege);heroPoints=support.Heroes.Select(SupportPlan.Midpoint).ToArray();
+                    if(SupportEnabled)log("Support sides: "+String.Join(", ",support.Heroes.Select((side,i)=>HeroKeys[i]+"="+side.Name))+"; siege="+support.Siege.Name+".");
+                    heroIndex=0;abilityIndex=0;actionIndex=0;battleSwipes=false;homeSwipesRemaining=0;pendingAbilities.Clear();troopsFinished=DateTime.MinValue;battleDeadline=DateTime.MinValue;
                     log("Battle "+(Completed+1)+": "+(settings.FourSides?"all four sides":reverse?"reverse L":"normal L")+"; "+troopLayout.Summary+" troop clicks on the outer strip.");
                     log("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+".");AdvanceAction(now);return;
                 }
@@ -507,7 +645,7 @@ namespace ClashPekkas {
                     }
                 }
                 else if (State=="Return home" && Ready("attack",out point)) {
-                    Completed++; log("Completed battle "+Completed+"/"+limit+".");
+                    CountReturnedBattle();
                     if(SwipesEnabled){homeSwipesRemaining=random.Next(1,3);Go("Home swipes",now);next=now.AddMilliseconds(random.Next(1000,2001));return;}
                     else if (Completed>=limit) Stop("Finished "+Completed+" battles. Stopped at home.");
                     else { ResetLoot();battleDeadline=DateTime.MinValue;scannedNavigation=false;OpenFromHome(point,now);return; }
@@ -529,6 +667,10 @@ namespace ClashPekkas {
     public static class Vision {
         public const int W=1600,H=900;
         public static Rectangle Region(string name) {
+            if(name=="inactivityTitle")return new Rectangle(420,330,760,150);
+            if(name=="reload")return new Rectangle(420,440,760,180);
+            if(name=="exitTitle")return new Rectangle(420,210,760,180);
+            if(name=="exitCancel")return new Rectangle(470,480,340,200);
             if (name=="attack") return new Rectangle(0,590,400,310);
             if (name=="find") return new Rectangle(65,600,420,140);
             if (name=="launch") return new Rectangle(1160,750,440,140);
@@ -541,6 +683,10 @@ namespace ClashPekkas {
         public static string Clean(string value) { return Regex.Replace((value??"").ToLowerInvariant(),"[^a-z0-9]",""); }
         public static bool Label(string name,string text) {
             string s=Clean(text);
+            if(name=="inactivityTitle")return ButtonMatches(s,"anyonethere");
+            if(name=="reload")return ButtonMatches(s,"reloadgame");
+            if(name=="exitTitle")return ButtonMatches(s,"confirmexit");
+            if(name=="exitCancel")return ButtonMatches(s,"cancel");
             // Stylized Battle lettering: t may be f/e, and l may be i/1.
             if (name=="attack") return Regex.IsMatch(s,@"^ba[tfe][tf][li1]e$") || ButtonMatches(s,"battle") || ButtonMatches(s,"attack");
             if (name=="next") return ButtonMatches(s,"next");
@@ -824,11 +970,115 @@ namespace ClashPekkas {
             finally { if(SendInput(1,new[]{up},size)!=1) throw new Exception("Selection key release failed. Run stopped."); }
         }
     }
+    // Match the bright home HUD itself, rather than scenery that moves with the camera.
+    // Sampling RGB also rejects the dimmed HUD behind modal dialogs.
+    public sealed class HomeVisual {
+        sealed class Template {public int Width,Height;public Color[] Pixels;}
+        readonly Template[] battle,build,shop;
+        static Template Load(string folder,string name) {
+            string path=Path.Combine(folder,name);if(!File.Exists(path))return null;
+            using(Bitmap image=new Bitmap(path)) {
+                var result=new Template{Width=image.Width,Height=image.Height,Pixels=new Color[256]};
+                for(int y=0;y<16;y++)for(int x=0;x<16;x++)result.Pixels[y*16+x]=image.GetPixel((int)((x+.5)*image.Width/16),(int)((y+.5)*image.Height/16));
+                return result;
+            }
+        }
+        static Template[] LoadVariants(string folder,string name){return new[]{Load(folder,"home-"+name+".png"),Load(folder,"developer-home-"+name+".png")}.Where(item=>item!=null).ToArray();}
+        public HomeVisual(string folder){battle=LoadVariants(folder,"battle");build=LoadVariants(folder,"build");shop=LoadVariants(folder,"shop");}
+        static Vec MatchAny(byte[] pixels,int stride,Template[] templates,Rectangle region) {
+            foreach(Template template in templates){Vec point=Match(pixels,stride,template,region);if(point!=null)return point;}return null;
+        }
+        static Vec Match(byte[] pixels,int stride,Template template,Rectangle region) {
+            if(template==null)return null;
+            // Allow minor antialiasing/size differences between valid home HUDs.
+            // The independent bright Build/Shop match remains mandatory.
+            double best=26;Vec found=null;
+            foreach(double scale in new[]{.70,.80,.90,.94,.96,.98,1.0,1.02,1.04,1.06,1.08,1.10,1.20}) {
+                int w=(int)Math.Round(template.Width*scale),h=(int)Math.Round(template.Height*scale);
+                for(int top=region.Top;top+h<=region.Bottom;top+=3)for(int left=region.Left;left+w<=region.Right;left+=3) {
+                    double error=0;bool rejected=false;
+                    for(int y=0;y<16 && !rejected;y++)for(int x=0;x<16;x++) {
+                        int offset=(top+(int)((y+.5)*h/16))*stride+(left+(int)((x+.5)*w/16))*4;Color expected=template.Pixels[y*16+x];
+                        error+=Math.Abs(pixels[offset]-expected.B)+Math.Abs(pixels[offset+1]-expected.G)+Math.Abs(pixels[offset+2]-expected.R);
+                        if(error>=best*256*3){rejected=true;break;}
+                    }
+                    if(!rejected && error/(256*3)<best){best=error/(256*3);found=new Vec((left+w/2.0)/Vision.W,(top+h/2.0)/Vision.H);}
+                }
+            }
+            return found;
+        }
+        public Vec FindHome(Bitmap image,Vec recognizedBattle=null) {
+            BitmapData data=image.LockBits(new Rectangle(0,0,image.Width,image.Height),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
+            try {
+                byte[] pixels=new byte[data.Stride*data.Height];Marshal.Copy(data.Scan0,pixels,0,pixels.Length);
+                Vec point=recognizedBattle??MatchAny(pixels,data.Stride,battle,new Rectangle(0,630,240,270));if(point==null)return null;
+                // Both supported home HUD sizes contain this point. Use one stable
+                // target when recognition alternates between text and icon matching.
+                return MatchAny(pixels,data.Stride,build,new Rectangle(1360,630,240,270))!=null || MatchAny(pixels,data.Stride,shop,new Rectangle(1400,330,200,230))!=null?new Vec(.065,.91):null;
+            }finally{image.UnlockBits(data);}
+        }
+    }
     public sealed class ScreenReader {
         readonly OcrReader ocr; readonly Action<string> log; readonly string folder;
+        readonly HomeVisual homeVisual;
         readonly JavaScriptSerializer json=new JavaScriptSerializer();
         readonly Dictionary<string,DateTime> lastReport=new Dictionary<string,DateTime>();
-        public ScreenReader(OcrReader ocr,string folder,Action<string> log) { this.ocr=ocr;this.folder=folder;this.log=log; }
+        public ScreenReader(OcrReader ocr,string folder,Action<string> log,string assetFolder=null) {
+            this.ocr=ocr;this.folder=folder;this.log=log;
+            homeVisual=new HomeVisual(String.IsNullOrWhiteSpace(assetFolder)?Path.Combine(String.IsNullOrWhiteSpace(folder)?AppFiles.Root:Path.GetDirectoryName(folder),"assets"):assetFolder);
+        }
+        static Vec InRegion(OcrLine[] lines,string name) {
+            Rectangle roi=Vision.Region(name);
+            OcrLine[] local=lines.Where(line=>roi.Contains((int)(line.X+line.Width/2),(int)(line.Y+line.Height/2)) && !(name=="find" && Vision.Label("retreat",line.Text)))
+                .Select(line=>new OcrLine{Text=line.Text,X=line.X-roi.X,Y=line.Y-roi.Y,Width=line.Width,Height=line.Height}).ToArray();
+            return Vision.Locate(name,local,roi);
+        }
+        public NavigationObservation ObserveNavigation(Bitmap image) {
+            // All classifications and fallback crops below use this exact captured frame.
+            var result=new NavigationObservation{Frame=new Bitmap(image)};
+            Func<string,Vec> crop=name=>Find(image,name,result.Crops);
+            try {
+                result.Ocr=ReadImage(image);
+                if(InRegion(result.Ocr,"inactivityTitle")!=null){result.Kind="Inactivity dialog";result.Reload=InRegion(result.Ocr,"reload")??crop("reload");return result;}
+                if(result.Ocr.Any(line=>line.Y>650 && line.X>450 && line.X<1150 && Vision.TextSimilarity(line.Text,"Loading")>=.8)){result.Kind="Loading";return result;}
+                if(InRegion(result.Ocr,"exitTitle")!=null) {
+                    result.Kind="Exit dialog";result.Cancel=InRegion(result.Ocr,"exitCancel")??crop("exitCancel");return result;
+                }
+                if(InRegion(result.Ocr,"surrenderTitle")!=null){result.Kind="Battle exit";return result;}
+                if(InRegion(result.Ocr,"launch")!=null || InRegion(result.Ocr,"find")!=null){result.Kind="Menu";return result;}
+                bool selection=result.Ocr.Any(line=>line.Y>680 && line.X>230 && line.X<1300 && Regex.IsMatch(Vision.Clean(line.Text),@"^(upgrade|info|move|remove|train|research)"));
+                if(selection){result.Kind="Menu";return result;}
+                Vec home=homeVisual.FindHome(image);
+                if(home!=null){
+                    result.Kind="Home";result.Home=home; // Stable button center even when text OCR alternates between success and failure.
+                    DateTime previous;
+                    if(InRegion(result.Ocr,"attack")==null && log!=null && (!lastReport.TryGetValue("visualHome",out previous) || (DateTime.Now-previous).TotalSeconds>=5)) {
+                        lastReport["visualHome"]=DateTime.Now;log("Home recognized visually: Battle and Build/Shop indicators. Text OCR was not required.");
+                    }
+                    return result;
+                }
+                // Text is an independent recognition path, not gated on a Battle
+                // template match. The bright independent HUD anchor rejects dimmed
+                // home controls behind dialogs. All checks still use this one frame.
+                Vec battleText=InRegion(result.Ocr,"attack")??crop("attack");
+                if(battleText!=null && (home=homeVisual.FindHome(image,battleText))!=null) {
+                    result.Kind="Home";result.Home=home;
+                    if(log!=null)log("Home recognized by Battle text and a bright Build/Shop indicator.");
+                    return result;
+                }
+                // Full-frame OCR can lose small labels; retry dialog crops before
+                // classifying controls visible behind a modal.
+                if(crop("inactivityTitle")!=null){result.Kind="Inactivity dialog";result.Reload=crop("reload");return result;}
+                if(crop("exitTitle")!=null){result.Kind="Exit dialog";result.Cancel=crop("exitCancel");return result;}
+                if(crop("surrenderTitle")!=null){result.Kind="Battle exit";return result;}
+                if(InRegion(result.Ocr,"next")!=null || crop("next")!=null){result.Kind="Scouting";return result;}
+                result.Return=InRegion(result.Ocr,"return")??crop("return");
+                if(result.Return!=null){result.Kind="Results";return result;}
+                if(InRegion(result.Ocr,"retreat")!=null || result.Ocr.Any(line=>line.Y<180 && line.X>500 && line.X<1100 && Vision.TextSimilarity(line.Text,"Battle ends in")>=.8) || crop("retreat")!=null) {result.Kind="Battle";return result;}
+                if(crop("find")!=null || crop("launch")!=null)result.Kind="Menu";
+                return result;
+            }catch {result.Dispose();throw;}
+        }
         OcrLine[] ReadImage(Bitmap image) {
             using(var stream=new MemoryStream()) { image.Save(stream,ImageFormat.Png);return json.Deserialize<OcrLine[]>(ocr(stream.ToArray()))??new OcrLine[0]; }
         }
@@ -898,7 +1148,7 @@ namespace ClashPekkas {
             }
             return null;
         }
-        public Vec Find(Bitmap image,string button) {
+        public Vec Find(Bitmap image,string button,Dictionary<string,OcrLine[]> observations=null) {
             Rectangle region=Vision.Region(button);
             using(Bitmap crop=image.Clone(region,PixelFormat.Format32bppArgb)) using(Bitmap enlarged=Vision.Resize(crop,crop.Width*2,crop.Height*2)) using(var stream=new MemoryStream()) {
                 enlarged.Save(stream,ImageFormat.Png);
@@ -906,7 +1156,7 @@ namespace ClashPekkas {
                 OcrLine[] lines=json.Deserialize<OcrLine[]>(result) ?? new OcrLine[0];
                 foreach(OcrLine line in lines) { line.X/=2;line.Y/=2;line.Width/=2;line.Height/=2; }
                 Vec found=Vision.Locate(button,lines,region);
-                if((button=="next" || button=="attack" || button=="end" || button=="retreat" || button=="return" || button=="surrenderTitle" || button=="confirmSurrender") && found==null) {
+                if((button=="next" || button=="attack" || button=="end" || button=="retreat" || button=="return" || button=="surrenderTitle" || button=="confirmSurrender" || button=="exitTitle" || button=="exitCancel" || button=="inactivityTitle" || button=="reload") && found==null) {
                     foreach(int scale in new[]{2,3}) {
                         using(Bitmap large=Vision.Resize(crop,crop.Width*scale,crop.Height*scale)) using(Bitmap mask=Vision.WhiteDigits(large)) {
                             OcrLine[] processed=ReadImage(mask);
@@ -916,6 +1166,7 @@ namespace ClashPekkas {
                         }
                     }
                 }
+                if(observations!=null)observations[button]=lines;
                 DateTime previous;
                 if(log!=null && (!lastReport.TryGetValue(button,out previous) || (DateTime.Now-previous).TotalSeconds>=5)) {
                     lastReport[button]=DateTime.Now;
@@ -1093,13 +1344,16 @@ namespace ClashPekkas {
             switch(key){case Keys.D1:return 8;case Keys.A:return 29;case Keys.Z:return 54;case Keys.Q:return 45;case Keys.W:return 51;case Keys.E:return 33;case Keys.R:return 46;default:throw new Exception("Unsupported Android selection key.");}
         }
         public void Key(Keys key) {Text("shell input keyevent "+AndroidKeyCode(key));}
+        public void Back(){Text("shell input keyevent 4");}
     }
-    public sealed class AndroidGame : CapturedGame,ISupportGame,ISwipeGame {
+    public sealed class AndroidGame : CapturedGame,ISupportGame,ISwipeGame,IRecoveryGame {
         readonly bool google;protected override bool GoogleLayout {get{return google;}}
         protected override bool DeveloperLayout {get{return google;}}
         readonly AdbClient client;readonly IntPtr window;Size resolution;DateTime checkedApp;
+        readonly string recoveryDirectory;readonly Action<string> report;
         public AndroidGame(IntPtr window,Settings settings,OcrReader ocr,string referencePath,Action<string> log) : base(ocr,referencePath,log) {
             this.window=window;google=settings.GooglePlay;client=AdbClient.Connect(settings);
+            recoveryDirectory=Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(referencePath)),"data","diagnostics","recovery");report=log;
             if(log!=null) log("Android connected: "+client.Serial+". Desktop focus is not required.");
         }
         public override void Guard() {
@@ -1126,6 +1380,14 @@ namespace ClashPekkas {
             client.Tap(Math.Min(resolution.Width-1,(int)Math.Round(point.X*resolution.Width)),Math.Min(resolution.Height-1,(int)Math.Round(point.Y*resolution.Height)));
         }
         public override void PressKey(Keys key) {if(!google)throw new NotSupportedException("BlueStacks uses card taps.");Guard();client.Key(key);}
+        public NavigationObservation ObserveNavigation(){using(Bitmap image=Capture())return reader.ObserveNavigation(image);}
+        public void Back(){Guard();client.Back();}
+        public void SaveRecovery(NavigationObservation observation,RecoveryRecord record) {
+            try{RecoveryDiagnostics.Save(recoveryDirectory,observation,record);}
+            catch(IOException ex){if(report!=null)report("Could not save recovery diagnostics: "+ex.Message);}
+            catch(UnauthorizedAccessException ex){if(report!=null)report("Could not save recovery diagnostics: "+ex.Message);}
+            catch(ExternalException ex){if(report!=null)report("Could not save recovery screenshot: "+ex.Message);}
+        }
         public bool TrySelectSupport(Keys key) {if(!google)return false;PressKey(key);return true;}
         public void Swipe(Vec from,Vec to,int durationMs) {
             Guard();if(resolution==Size.Empty)throw new Exception("Read the Android screen before swiping.");
@@ -1361,6 +1623,7 @@ namespace ClashPekkas {
             UpdateWindowTitle();
         }
         static string TaskbarActivity(string state) {
+            if(state=="Home recovery")return "Recovering home";
             if(state=="Home" || state=="Home swipes") return "On home";
             if(state=="Return home" || state=="Search home" || state=="Search return") return "Returning home";
             if(state=="Navigation recovery" || state=="Recover search") return "Recovering search";
@@ -1374,7 +1637,7 @@ namespace ClashPekkas {
         void UpdateWindowTitle() {
             string nextTitle;
             if(positionsOnly) nextTitle="Clash Farmer - "+(IsBusy?"Preparing preview":"Ready");
-            else if(requested>0) nextTitle=ProgressTitle(countdown!=DateTime.MinValue?"Starting":runner!=null && runner.Active?TaskbarActivity(runner.State):titleState,runner==null?0:runner.Completed,requested);
+            else if(requested>0) nextTitle=ProgressTitle(countdown!=DateTime.MinValue?"Starting":runner!=null && runner.Active?(runner.State=="Home recovery"?"Recovering home - attempt "+runner.RecoveryAttempt+"/3":TaskbarActivity(runner.State)):titleState,runner==null?0:runner.Completed,requested);
             else nextTitle="Clash Farmer - "+titleState;
             // Avoid sending a window-title update every timer tick when nothing changed.
             if(Text!=nextTitle) Text=nextTitle;
@@ -1424,7 +1687,7 @@ namespace ClashPekkas {
             if(runner!=null&&runner.Active) {
                 runner.Tick(DateTime.Now);
                 if(!runner.Active) Finish(runner.Message??"Run stopped.",true);
-                else status.Text=(runner.State=="Scouting" && settings.FilterLoot ? "Checking enabled loot targets; unreadable after 3 attempts attacks this base..." : FriendlyState(runner.State))+"\nCompleted "+runner.Completed+" of "+requested+" battles. F9 stops the run.";
+                else status.Text=(runner.State=="Home recovery"?"Recovering home - attempt "+runner.RecoveryAttempt+"/3":runner.State=="Scouting" && settings.FilterLoot ? "Checking enabled loot targets; unreadable after 3 attempts attacks this base..." : FriendlyState(runner.State))+"\nCompleted "+runner.Completed+" of "+requested+" battles. F9 stops the run.";
             }
         }
         static string FriendlyState(string state) {

@@ -37,8 +37,13 @@ try {
     $game=[ClashPekkas.AndroidGame]::new([IntPtr]::Zero,$settings,$reader,(Join-Path $AssetDirectory 'pekka-face.png'),[Action[string]]{param($line)})
     try {
         $capture=$game.Capture();$capture.Dispose()
+        $before=@(Get-Content -LiteralPath (Join-Path $testDir 'calls.txt') | Where-Object {$_ -match 'exec-out screencap'}).Count
+        $observed=$game.ObserveNavigation();$observed.Dispose()
+        $after=@(Get-Content -LiteralPath (Join-Path $testDir 'calls.txt') | Where-Object {$_ -match 'exec-out screencap'}).Count
+        if($after -ne $before+1){throw 'Recovery observation must use exactly one Android capture.'}
         $game.Click([ClashPekkas.Vec]::new(.5,.5))
         $game.Swipe([ClashPekkas.Vec]::new(.4,.4),[ClashPekkas.Vec]::new(.6,.6),250)
+        $game.Back()
         foreach($key in @('D1','A','Z','Q','W','E','R')){$game.PressKey([Windows.Forms.Keys]::$key)}
         if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Z)){throw 'Android siege selection must use ADB.'}
         if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Q)){throw 'Android hero selection must use ADB.'}
@@ -47,6 +52,7 @@ try {
     foreach($code in @(8,29,54,45,51,33,46)){if($calls -notcontains "-s 127.0.0.1:6520 shell input keyevent $code"){throw "Missing Android key event $code"}}
     if($calls -notcontains '-s 127.0.0.1:6520 shell input tap 800 450'){throw 'Google taps must scale to the Android screenshot, not Windows coordinates.'}
     if($calls -notcontains '-s 127.0.0.1:6520 shell input swipe 640 360 959 539 250'){throw 'Google swipe must scale to the Android screen and use the requested duration.'}
+    if($calls -notcontains '-s 127.0.0.1:6520 shell input keyevent 4'){throw 'Recovery Back must be an Android key event, not desktop Escape.'}
     if($calls -match '^connect '){throw 'An online loopback alias must be reused without reconnecting.'}
     'PASS: Android screenshot bytes decode correctly and taps target the specified local emulator. Uses a fake ADB executable; no game input, network connection, desktop focus, or mouse input was used.'
 } finally {

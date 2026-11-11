@@ -1,6 +1,7 @@
 # Generated executables and local runtime data (settings, logs, screenshots).
 /bin/
 /data/
+/diagnostics/
 *.pdb
 *.tmp
 .vs/

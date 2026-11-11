@@ -20,7 +20,9 @@ namespace ClashPekkas {
                     session.ApartmentState=ApartmentState.STA;session.ThreadOptions=PSThreadOptions.UseCurrentThread;session.Open();
                     using(PowerShell shell=PowerShell.Create()) {
                         shell.Runspace=session;
-                        shell.AddScript("$ErrorActionPreference='Stop'; . '"+Path.Combine(folder,"scripts","Ocr.ps1").Replace("'","''")+"'");shell.Invoke();
+                        // Load our bundled OCR functions directly into the private
+                        // runspace. This does not require enabling .ps1 files globally.
+                        shell.AddScript("$ErrorActionPreference='Stop';\n"+File.ReadAllText(Path.Combine(folder,"scripts","Ocr.ps1")));shell.Invoke();
                         Check(shell);
                         OcrReader reader=delegate(byte[] png) {
                             shell.Commands.Clear();shell.Streams.Error.Clear();

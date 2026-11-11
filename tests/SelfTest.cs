@@ -8,7 +8,7 @@ namespace ClashPekkas {
         public bool SiegeAvailable,HeroAvailable;public int SiegeDeployments,HeroDeployments;
         public bool FlexibleActions;
         public readonly List<Vec> SupportPoints=new List<Vec>();
-        public bool TrySelectSupport(Keys key) {
+        public virtual bool TrySelectSupport(Keys key) {
             Guard();if(!(key==Keys.Z?SiegeAvailable:HeroAvailable))return false;
             if(Screen!="scout" && !(FlexibleActions && (Screen=="battle" || Screen=="fighting")))throw new Exception("Support selected on wrong screen");
             SelectionKeys.Add(key);Screen=key==Keys.Z?"supportSiege":"supportHero";return true;
@@ -29,8 +29,8 @@ namespace ClashPekkas {
         public readonly Dictionary<string,int> Reads=new Dictionary<string,int>();
         public List<LootReading> Opponents=new List<LootReading>{new LootReading(1000000,1000000)};
         public readonly Queue<LootReading> TransientLoot=new Queue<LootReading>();
-        public void Guard() { if(Occluded) throw new Exception("focus lost"); }
-        public Vec Find(string button) {
+        public virtual void Guard() { if(Occluded) throw new Exception("focus lost"); }
+        public virtual Vec Find(string button) {
             if(!Reads.ContainsKey(button)) Reads[button]=0;Reads[button]++;
             if(Missing) return null;
             if(button=="attack" && Screen=="home") return new Vec(.1,.9);
@@ -55,7 +55,7 @@ namespace ClashPekkas {
             SelectionKeys.Add(key);
         }
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { LootReads++;if(TransientLoot.Count>0) return TransientLoot.Dequeue();return UnreadableFirst && NextClicks==0 ? null : Opponents[Math.Min(NextClicks,Opponents.Count-1)]; }
-        public void Click(Vec p) {
+        public virtual void Click(Vec p) {
             Guard();
             if(Screen=="supportSiege" || Screen=="supportHero") {if(Screen=="supportSiege")SiegeDeployments++;else HeroDeployments++;SupportPoints.Add(p);Screen=FlexibleActions?"battle":"scout";}
             else if(Screen=="home") { if(StrictNavigation && (p.X>.2 || p.Y<.82)) throw new Exception("Wrong home coordinate");HomeClicks++;Screen="find"; }
@@ -202,7 +202,13 @@ namespace ClashPekkas {
                     int offset=0;
                     for(int b=0;b<2;b++)for(int i=0;i<4;i++) {
                         Vec point=supportGame.SupportPoints[b*(siege?5:4)+offset+i];
-                        if(mode=="FourSides")Assert(Math.Abs(point.X-(sides[i].A.X+sides[i].B.X)/2)<1e-10 && Math.Abs(point.Y-(sides[i].A.Y+sides[i].B.Y)/2)<1e-10,"one hero per four-side path");
+                        if(mode=="FourSides") {
+                            string[] clockwise={"upper-left","upper-right","lower-right","lower-left"};
+                            Vec first=supportGame.SupportPoints[b*(siege?5:4)+offset];
+                            string firstName=sides.Single(side=>Plan.PixelDistance(first,SupportPlan.Midpoint(side))<.01).Name;
+                            DeploymentSide expected=sides.Single(side=>side.Name==clockwise[(Array.IndexOf(clockwise,firstName)+i)%4]);
+                            Assert(Plan.PixelDistance(point,SupportPlan.Midpoint(expected))<.01,"heroes rotate clockwise from their random starting side");
+                        }
                         if(mode=="LShape" && i%2==1) {Vec previous=supportGame.SupportPoints[b*(siege?5:4)+offset+i-1];Assert(point.X==previous.X && point.Y==previous.Y,"two heroes share each L side");}
                     }
                 }
