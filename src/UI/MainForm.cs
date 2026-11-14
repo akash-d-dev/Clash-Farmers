@@ -15,6 +15,9 @@ namespace ClashPekkas {
         readonly string folder; readonly OcrReader ocr; Settings settings;
         readonly PlayerPicker choosePlayer; readonly PlayerActivator activatePlayer;
         readonly TextBox log=new TextBox(); readonly Label status=new Label();
+        readonly CheckBox showLogs=new CheckBox();readonly Label hiddenLogsHint=new Label();
+        readonly Queue<string> recentLogs=new Queue<string>();int recentLogCharacters;
+        const int LogHistoryCharacters=64000;
         readonly Label connectionHint=new Label();
         readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();
         readonly List<Control> actions=new List<Control>();
@@ -130,6 +133,17 @@ namespace ClashPekkas {
             foreach(Control control in Controls) if(control is Label && control.Text=="Battles") control.Top+=80;
             log.Height-=80;
             randomSwipes.Name="randomSwipes";randomSwipes.Text="Random swipes (ADB)";randomSwipes.AutoSize=true;randomSwipes.Location=new Point(280,588);randomSwipes.Checked=settings.RandomSwipes;Controls.Add(randomSwipes);
+            showLogs.Name="showLogs";showLogs.Text="Show logs";showLogs.AutoSize=true;showLogs.Location=new Point(600,588);showLogs.Checked=settings.ShowLogs;Controls.Add(showLogs);
+            hiddenLogsHint.Name="hiddenLogsHint";hiddenLogsHint.Text="Logs hidden. Turn on Show logs to view recent activity.";hiddenLogsHint.AutoSize=true;Controls.Add(hiddenLogsHint);
+            ApplyLogVisibility();
+            showLogs.CheckedChanged+=delegate {
+                ApplyLogVisibility();
+                try {
+                    var preferences=Settings.FromJson(File.ReadAllText(AppFiles.SettingsFile(folder)));
+                    preferences.ShowLogs=showLogs.Checked;
+                    File.WriteAllText(AppFiles.SettingsFile(folder),new JavaScriptSerializer().Serialize(preferences));settings.ShowLogs=preferences.ShowLogs;
+                }catch(Exception ex){status.Text="Log display changed, but the preference could not be saved: "+ex.Message;}
+            };
             Write("Ready. Start from your main village. "+connectionHint.Text);
             Write("Use the first troop card only. Deployment, troop/spell counts, duration, and loot targets are configurable above. Unreadable loot after three attempts attacks the current base.");
             foreach(var input in new[]{troopCount,spellCount,durationSeconds,goldMinimum,elixirMinimum,darkMinimum,battleCount,openingDepth,laterDepth,fourSidesDepth}) input.ValueChanged+=delegate {if(!IsBusy) Safely(SaveInputs);};
@@ -152,6 +166,7 @@ namespace ClashPekkas {
             nextSettings.DeploymentMode=deploymentSelector.SelectedIndex==1?"FourSides":"LShape";nextSettings.Spells=(int)spellCount.Value;
             nextSettings.DeploySiegeAndFirstHero=supportUnits.Checked;
             nextSettings.RandomSwipes=randomSwipes.Checked;
+            nextSettings.ShowLogs=showLogs.Checked;
             nextSettings.LShapeOpeningDepthPercent=(int)openingDepth.Value;nextSettings.LShapeLaterDepthPercent=(int)laterDepth.Value;nextSettings.FourSidesSpellDepthPercent=(int)fourSidesDepth.Value;
             nextSettings.Troops=(int)troopCount.Value;nextSettings.Battles=(int)battleCount.Value;nextSettings.AttackDurationSeconds=(int)durationSeconds.Value;
             nextSettings.MinGold=(long)goldMinimum.Value;nextSettings.MinElixir=(long)elixirMinimum.Value;nextSettings.MinDarkElixir=(long)darkMinimum.Value;nextSettings.FilterLoot=true;nextSettings.Validate();
@@ -179,6 +194,7 @@ namespace ClashPekkas {
         void LayoutDetails() {
             int y=details.Visible?713:625;int bottom=log.Bottom;
             log.SetBounds(log.Left,y,log.Width,Math.Max(80,bottom-y));
+            hiddenLogsHint.Location=new Point(log.Left+12,log.Top+12);
             detailsButton.Text=details.Visible ? "Hide troubleshooting" : "Placement & troubleshooting...";
         }
         void AddDetailButton(string text,int x,int y,int width,Action action) {
@@ -191,8 +207,21 @@ namespace ClashPekkas {
         }
         void Write(string text) {
             string entry=DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")+"  "+text+Environment.NewLine;
-            log.AppendText(entry);
+            recentLogs.Enqueue(entry);recentLogCharacters+=entry.Length;
+            while(recentLogCharacters>LogHistoryCharacters && recentLogs.Count>1)recentLogCharacters-=recentLogs.Dequeue().Length;
+            if(showLogs.Checked) {
+                if(log.TextLength+entry.Length>LogHistoryCharacters*1.5)RefreshLogDisplay();
+                else log.AppendText(entry);
+            }
             try { File.AppendAllText(Path.Combine(folder,"data","run.log"),entry); } catch(IOException) { }
+        }
+        void RefreshLogDisplay() {
+            log.Text=String.Concat(recentLogs);log.SelectionStart=log.TextLength;log.ScrollToCaret();
+        }
+        void ApplyLogVisibility() {
+            log.Visible=showLogs.Checked;hiddenLogsHint.Visible=!showLogs.Checked;
+            hiddenLogsHint.Location=new Point(log.Left+12,log.Top+12);
+            if(showLogs.Checked)RefreshLogDisplay();
         }
         void SyncControls() {
             bool busy=IsBusy;

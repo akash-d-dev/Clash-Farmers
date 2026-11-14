@@ -120,6 +120,22 @@ try {
     if($saved.Troops -ne 500 -or $saved.AttackDurationSeconds -ne 3 -or $saved.MinGold -ne 0 -or $saved.MinElixir -ne 0 -or $saved.MinDarkElixir -ne 100){throw 'Configurable inputs were not saved.'}
     $form.Show()
     [Windows.Forms.Application]::DoEvents()
+    $logToggle=$form.Controls.Find('showLogs',$true)[0]
+    $activity=$form.Controls.Find('activityLog',$true)[0]
+    $private=[Reflection.BindingFlags]'Instance,NonPublic'
+    $writeLog=$form.GetType().GetMethod('Write',$private)
+    if($null -eq $logToggle -or $logToggle.Checked -or $activity.Visible){throw 'Log display should default hidden.'}
+    if([ClashPekkas.Settings]::FromJson('{}').ShowLogs){throw 'Older settings should default to hidden logs.'}
+    $beforeHidden=$activity.Text
+    $writeLog.Invoke($form,@('hidden-render-check'))
+    if($activity.Text -ne $beforeHidden){throw 'Hidden logs must not update the textbox.'}
+    if(-not [IO.File]::ReadAllText((Join-Path $testFolder 'data\run.log')).Contains('hidden-render-check')){throw 'Hidden entries must still be written to the file log.'}
+    $logToggle.Checked=$true
+    if(-not $activity.Visible -or -not $activity.Text.Contains('hidden-render-check')){throw 'Showing logs must restore recent entries.'}
+    $writeLog.Invoke($form,@('visible-render-check'))
+    if(-not $activity.Text.Contains('visible-render-check')){throw 'Visible logs must follow new entries.'}
+    $reopened=[ClashPekkas.MainForm]::new($testFolder,$reader,$picker,$activator)
+    try{if(-not $reopened.Controls.Find('showLogs',$true)[0].Checked){throw 'Log display preference must survive reopening.'}}finally{$reopened.Dispose()}
     if(-not $fourDepth.Visible -or $openingDepth.Visible -or $laterDepth.Visible){throw 'Four-side depth visibility is incorrect.'}
     $deployment.SelectedIndex=0
     if($fourDepth.Visible -or -not $openingDepth.Visible -or -not $laterDepth.Visible){throw 'L-shaped depth visibility is incorrect.'}
@@ -153,6 +169,12 @@ try {
     if($swipeToggle.Enabled){throw 'Random swipe setting must lock while running.'}
     if($orderButton.Enabled){throw 'Action order must lock during a run.'}
     if($openingDepth.Enabled -or $laterDepth.Enabled -or $fourDepth.Enabled){throw 'Depth controls must lock during countdown.'}
+    if(-not $logToggle.Enabled){throw 'Log visibility must remain available during a run.'}
+    $logToggle.Checked=$false
+    $writeLog.Invoke($form,@('busy-hidden-render-check'))
+    if(-not $form.IsBusy -or $activity.Visible -or $activity.Text.Contains('busy-hidden-render-check')){throw 'Hiding logs must skip textbox updates without stopping the run.'}
+    $visibilitySaved=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText((Join-Path $testFolder 'data\settings.json')))
+    if($visibilitySaved.ShowLogs -or $visibilitySaved.Troops -ne $saved.Troops -or ($visibilitySaved.ActionOrder -join ',') -ne ($saved.ActionOrder -join ',')){throw 'Saving log visibility during a run must preserve other settings.'}
     $stop.PerformClick()
     if ($form.IsBusy -or $stop.Enabled -or -not $start.Enabled) { throw 'Stopping must immediately restore idle controls.' }
     if(-not $spells.Enabled -or -not $deployment.Enabled){throw 'New settings must unlock after Stop.'}

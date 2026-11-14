@@ -19,6 +19,7 @@
   "AttackDurationSeconds": 90,
   "UseSpells": true,
   "RandomSwipes": true,
+  "ShowLogs": false,
   "Spells": 11,
   "MinSpellIntervalMs": 2000,
   "MaxSpellIntervalMs": 5000,

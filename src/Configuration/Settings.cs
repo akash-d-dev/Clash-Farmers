@@ -26,6 +26,7 @@ namespace ClashPekkas {
         public int AttackDurationSeconds=0;
         public bool UseSpells=true;
         public bool RandomSwipes=true;
+        public bool ShowLogs=false;
         public bool DeploySiegeAndFirstHero=true;
         public int Spells=11,MinSpellIntervalMs=2000,MaxSpellIntervalMs=5000;
         public int MinFirstSpellWaitMs=5000,MaxFirstSpellWaitMs=10000;

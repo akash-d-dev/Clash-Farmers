@@ -72,6 +72,12 @@ BlueStacks uses local ADB when enabled and otherwise uses desktop control. ADB d
 
 Stop with F9 or the Stop button. F9 is the only global keyboard stop shortcut, including while working in another app. Escape does not stop the runner and can still dismiss game dialogs. Stop is enabled only while busy. Cancellation prevents further troop, spell, or exit clicks after any current ADB command returns. Start begins a new run; internal recovery is available for a specifically restored counter/stage.
 
+**Show logs** toggles the activity display, including during a run. It defaults
+off and remembers your choice as `ShowLogs`. While hidden, entries are not appended
+to the log textbox or rendered there. Status and taskbar progress continue, and
+the full log is still written to `data/run.log` for troubleshooting. Turning the
+display on shows a bounded recent history once, then follows new entries.
+
 The window/taskbar title shows the activity first, followed by remaining battles and completed/total, for example `Searching | 20 left (10/30) - Clash Farmer`. The remaining count includes an attack in progress. Titles cover starting, home, searching, battle running, ending, returning home, recovery, stopped, and finished. Updates do not activate the app or interrupt the game. Windows must have taskbar labels enabled to show the full title directly; otherwise hover over the app's taskbar icon to read it.
 
 With Random swipes enabled, ADB sends a short gesture at a random 2–5 second interval after the complete configured action sequence has finished. Each gesture stays in the central battlefield away from HUD buttons. Before sending it, the runner checks that a battle is still visible and no exit dialog is open. Natural results, the cutoff and Stop cancel further battle gestures. Once home is verified, it sends one or two swipes, waiting 1–2 seconds before each, then continues to the next battle. The final battle also receives its home swipes before finishing. Skipped scouting bases do not receive home gestures. The checkbox is locked while running and unavailable in desktop control mode; advanced settings store it as `RandomSwipes`. Swipe intervals are measured after the previous gesture completes, and OCR/input overhead can add a small delay. Set troop and spell counts to the intended full stacks, since gestures over the battlefield can interact with units still selected if inventory remains.
