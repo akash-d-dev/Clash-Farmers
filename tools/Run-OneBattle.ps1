@@ -3,7 +3,7 @@ param([switch]$RunOneBattle)
 $ErrorActionPreference='Stop'
 if (-not $RunOneBattle) { throw 'Pass -RunOneBattle to run exactly one live attack through local ADB.' }
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms,System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 . "$ProjectRoot\scripts\Ocr.ps1"
 [ClashPekkas.AppFiles]::Initialize($ProjectRoot)
 $config=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText("$DataDirectory\settings.json"))

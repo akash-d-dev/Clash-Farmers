@@ -3,7 +3,7 @@ param([switch]$Navigate)
 $ErrorActionPreference='Stop'
 if (-not $Navigate) { throw 'This check navigates Battle and Find a Match, then stops before Attack. Pass -Navigate to run it.' }
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms,System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 . "$ProjectRoot\scripts\Ocr.ps1"
 [ClashPekkas.AppFiles]::Initialize($ProjectRoot)
 $config=[ClashPekkas.Settings]::FromJson([IO.File]::ReadAllText("$DataDirectory\settings.json"))

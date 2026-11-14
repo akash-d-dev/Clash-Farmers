@@ -1,7 +1,7 @@
 . "$PSScriptRoot\..\scripts\Paths.ps1"
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms,System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 . "$ProjectRoot\scripts\Ocr.ps1"
 $source=[Drawing.Bitmap]::new("$FixtureDirectory\reference-game.png")
 try {

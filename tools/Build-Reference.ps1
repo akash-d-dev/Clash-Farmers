@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$ImagePath)
 . "$PSScriptRoot\..\scripts\Paths.ps1"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 $image = [Drawing.Bitmap]::new($ImagePath)
 try {
     # Game viewport in the user's 2559 x 1439 windowed screenshot; excludes chrome and taskbar.
@@ -15,7 +15,7 @@ try {
         try { $face.Save("$AssetDirectory\pekka-face.png",[Drawing.Imaging.ImageFormat]::Png) } finally { $face.Dispose() }
         $spell = $canonical.Clone([ClashPekkas.Vision]::SpellFace,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try { $spell.Save("$AssetDirectory\spell-face.png",[Drawing.Imaging.ImageFormat]::Png) } finally { $spell.Dispose() }
-        [ClashPekkas.Vision]::DrawPlan($canonical,[ClashPekkas.Settings]::new())
+        [ClashPekkas.PlacementPreview]::Draw($canonical,[ClashPekkas.Settings]::new())
         $canonical.Save("$AssetDirectory\reference-preview.png",[Drawing.Imaging.ImageFormat]::Png)
     } finally { $canonical.Dispose() }
 } finally { $image.Dispose() }

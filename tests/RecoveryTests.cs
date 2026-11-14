@@ -52,6 +52,15 @@ namespace ClashPekkas {
     public sealed class MissingHeroFake : FakeGame {
         public override bool TrySelectSupport(Keys key){return key==Keys.W?false:base.TrySelectSupport(key);}
     }
+    public sealed class FindEvidenceGame : RecoveryFake {
+        public int FindEvidenceReads;public string Evidence;
+        public override Vec Find(string button) {
+            if(button!="find" || Screen!="find")return base.Find(button);
+            FindEvidenceReads++;
+            bool text=Evidence=="text" || Evidence=="alternating" && FindEvidenceReads%2==1;
+            return Vision.Locate("find",text?new[]{new OcrLine{Text="IFrjNdAMatcH",X=110,Y=15,Width=170,Height=30}}:new[]{new OcrLine{Text="1600 0",X=150,Y=65,Width=110,Height=30}},Vision.Region("find"));
+        }
+    }
     public static class RecoveryTests {
         static void Check(bool ok,string message){if(!ok)throw new Exception("RECOVERY TEST FAILED: "+message);}
         static Settings Options(){return new Settings{Platform="GooglePlayGames",RandomSwipes=false,DeploySiegeAndFirstHero=false,MinGold=0,MinElixir=0};}
@@ -60,6 +69,10 @@ namespace ClashPekkas {
         }
         public static string Run() {
             var now=new DateTime(2026,1,1);
+            foreach(string evidence in new[]{"text","price","alternating"}) {
+                var game=new FindEvidenceGame{Menus=1,Evidence=evidence};var runner=new Runner(game,Options(),1,false,_=>{},new Random(3));runner.Start(now);RunUntil(runner,game,now);
+                Check(runner.Completed==1 && game.FindEvidenceReads>=2 && game.Backs==1 && game.Records.Count==1,"post-popup scanned navigation accepts text OR price without repeated recovery, including alternating evidence");
+            }
             foreach(int depth in new[]{1,3,5}) {
                 var game=new RecoveryFake{Menus=depth};var runner=new Runner(game,Options(),1,false,_=>{},new Random(3));runner.Start(now);RunUntil(runner,game,now);
                 Check(runner.Completed==1 && game.Backs==depth,"nested menus recover and finish one battle");

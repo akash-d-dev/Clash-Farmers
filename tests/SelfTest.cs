@@ -74,6 +74,12 @@ namespace ClashPekkas {
             else throw new Exception("Unexpected click");
         }
     }
+    public sealed class GeometryFakeGame : FakeGame,IPlacementGame {
+        public Settings Geometry;public int Fits;
+        public readonly List<Vec> TroopPoints=new List<Vec>();
+        public Settings PlacementSettings(Settings settings){Fits++;return Geometry;}
+        public override void Click(Vec point){if(Screen=="deploy" && !(point.X<.2 && point.Y>.74))TroopPoints.Add(point);base.Click(point);}
+    }
     public sealed class SwipeFakeGame : FakeGame,ISwipeGame {
         public readonly List<DateTime> BattleSwipeTimes=new List<DateTime>(),HomeSwipeTimes=new List<DateTime>();
         public readonly List<int> HomeSwipeBattles=new List<int>();
@@ -103,6 +109,22 @@ namespace ClashPekkas {
         }
         public static string Run() {
             Settings settings=new Settings{FastNavigation=false};var logs=new List<string>();DateTime now=new DateTime(2026,1,1);
+            var stopReads=new List<int>();
+            Assert(!Native.StopRequested(key=>{stopReads.Add(key);return key==(int)Keys.Escape?short.MinValue:(short)0;}),"Escape no longer stops automation");
+            Assert(stopReads.Count==1 && stopReads[0]==(int)Keys.F9,"stop polling reads only F9");
+            Assert(Native.StopRequested(key=>short.MinValue) && Native.StopRequested(key=>(short)1) && !Native.StopRequested(key=>(short)0),"F9 held, newly pressed, and released states handled");
+            foreach(string mode in new[]{"LShape","FourSides"}) {
+                var original=new Settings{Platform="GooglePlayGames",DeploymentMode=mode,Troops=9,DeploySiegeAndFirstHero=false};
+                var shifted=new Settings{Platform="GooglePlayGames",DeploymentMode=mode,Troops=9,DeploySiegeAndFirstHero=false};
+                shifted.Normal=shifted.Normal.Select(p=>new Vec(p.X+.015,p.Y)).ToArray();shifted.Reverse=shifted.Reverse.Select(p=>new Vec(p.X-.015,p.Y)).ToArray();
+                var geometryGame=new GeometryFakeGame{Geometry=shifted,TroopsPerBattle=9};var geometryRunner=new Runner(geometryGame,original,2,false,logs.Add,new Random(3));geometryRunner.Start(now);
+                for(int tick=0;tick<20000 && geometryRunner.Active;tick++){geometryGame.Now=now.AddMilliseconds(tick*50);geometryRunner.Tick(geometryGame.Now);}
+                var shiftedSides=Plan.Sides(new Settings{DeploymentMode="FourSides",Normal=shifted.Normal,Reverse=shifted.Reverse},false);
+                Assert(geometryRunner.Completed==2 && geometryGame.Fits==2 && geometryGame.TroopPoints.Count==18,"fit geometry once for each accepted opponent and preserve troop counts");
+                foreach(Vec point in geometryGame.TroopPoints)Assert(shiftedSides.Any(side=>OnDepth(point,side,0)),"actual runner clicks use per-base deployment geometry");
+                for(int battle=0;battle<2;battle++)foreach(Vec point in geometryGame.SpellPoints.Skip(battle*11).Take(Plan.OpeningSpellCount(shifted)))Assert(shiftedSides.Any(side=>OnDepth(point,side,0)),"opening spells follow the same fitted troop paths");
+                Assert(original.Normal[0].X==Settings.OuterLines(false)[0].X,"runtime geometry does not overwrite saved paths");
+            }
             var swipeGame=new SwipeFakeGame{LongBattle=true};var completeTimes=new Dictionary<int,DateTime>();var homeReadyTimes=new Dictionary<int,DateTime>();
             Action<string> swipeLog=line=>{if(line.StartsWith("Configured action order complete"))completeTimes[swipeGame.ReturnClicks+1]=swipeGame.Now;if(line.StartsWith("Waiting: Home swipes"))homeReadyTimes[swipeGame.ReturnClicks]=swipeGame.Now;};
             var swipeRunner=new Runner(swipeGame,new Settings{AttackDurationSeconds=60},2,false,swipeLog,new Random(4));swipeRunner.Start(now);
@@ -442,27 +464,45 @@ namespace ClashPekkas {
             Assert(!Native.IsGoogleGameArea(new Rectangle(106,36,2425,1356),googleClient) && !Native.IsGoogleGameArea(googleClient,googleClient),"large offscreen overflow and whole-window candidates are rejected");
             Assert(AdbClient.Enabled(new Settings{Platform="GooglePlayGames",UseAdbWhenAvailable=false}),"Google Developer always uses ADB without desktop fallback");
             Assert(AdbClient.ValidSerial("localhost:6520") && !AdbClient.ValidSerial("localhost.example.com:6520"),"Google loopback alias accepted without remote hosts");
-            var oldGeometry=new Settings{GeometryVersion=2,Normal=Settings.PreviousOuterLines(false),Reverse=Settings.PreviousOuterLines(true),AttackDurationSeconds=30};
             var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
-            var previousConfig=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(oldGeometry));
-            previousConfig.Remove("NormalSpellGuide");previousConfig.Remove("ReverseSpellGuide");
-            var adjusted=Settings.FromJson(serializer.Serialize(previousConfig));
-            Assert(adjusted.GeometryVersion==4 && adjusted.AttackDurationSeconds==30,"geometry migration preserves the selected duration");
-            for(int i=2;i<4;i++)Assert(adjusted.Normal[i].X==oldGeometry.Normal[i].X && adjusted.Normal[i].Y==oldGeometry.Normal[i].Y,"working lower-left green line is unchanged");
-            for(int i=0;i<2;i++) {
-                Assert(adjusted.Normal[i].X<oldGeometry.Normal[i].X && adjusted.Normal[i].Y<oldGeometry.Normal[i].Y,"upper-left moves outward and upward");
-                Assert(adjusted.Reverse[i].X>oldGeometry.Reverse[i].X && adjusted.Reverse[i].Y<oldGeometry.Reverse[i].Y,"upper-right moves outward and upward");
+            foreach(int version in new[]{2,3,4}) {
+                var oldGeometry=new Settings{GeometryVersion=version,Normal=version==2?Settings.PreviousOuterLines(false):Settings.Version4OuterLines(false),Reverse=version==2?Settings.PreviousOuterLines(true):Settings.Version4OuterLines(true),AttackDurationSeconds=30,Battles=2,MinGold=700000};
+                if(version==3){oldGeometry.Reverse[2]=new Vec(.86,.51);oldGeometry.Reverse[3]=new Vec(.6104,.83);}
+                var previousConfig=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(oldGeometry));
+                previousConfig.Remove("NormalSpellGuide");previousConfig.Remove("ReverseSpellGuide");
+                var adjusted=Settings.FromJson(serializer.Serialize(previousConfig));
+                Assert(adjusted.GeometryVersion==5 && adjusted.AttackDurationSeconds==30 && adjusted.Battles==2 && adjusted.MinGold==700000,"old geometry migration preserves run preferences");
+                foreach(bool reversed in new[]{false,true}) {
+                    Vec[] actual=reversed?adjusted.Reverse:adjusted.Normal,expected=Settings.OuterLines(reversed);
+                    Assert(actual.Zip(expected,(a,b)=>Plan.PixelDistance(a,b)<.001).All(match=>match),"all known old preset sides migrate to the outer rim");
+                }
+                Assert(serializer.Serialize(Settings.FromJson(serializer.Serialize(adjusted)))==serializer.Serialize(adjusted),"geometry migration is stable across repeated loads");
             }
-            foreach(Vec p in Plan.Make(adjusted,true,new Random(11)).Where(p=>p.Y>.5))Assert(p.X+.78*p.Y>1.28 && p.X+.78*p.Y<1.30 && p.Y<=.83,"lower-right points stay beyond the tile edge and above the troop bar");
-            var tileEdge=new Settings{GeometryVersion=3,Battles=2,AttackDurationSeconds=30};
-            tileEdge.Reverse[2]=new Vec(.86,.51);tileEdge.Reverse[3]=new Vec(.6104,.83);
-            var grass=Settings.FromJson(serializer.Serialize(tileEdge));
-            Assert(grass.GeometryVersion==4 && grass.Battles==2 && grass.AttackDurationSeconds==30,"version 3 migration keeps run preferences");
-            for(int i=0;i<4;i++)Assert(grass.Normal[i].X==tileEdge.Normal[i].X && grass.Normal[i].Y==tileEdge.Normal[i].Y,"all normal L endpoints stay unchanged");
-            for(int i=0;i<4;i++)Assert(Math.Abs((grass.Reverse[i].X-tileEdge.Reverse[i].X)-(i<2?0:.03))<1e-10 && grass.Reverse[i].Y==tileEdge.Reverse[i].Y,"only lower-right endpoints move outward by 48 normalized pixels");
-            tileEdge.Reverse[2].X=.87;
-            var customGrass=Settings.FromJson(serializer.Serialize(tileEdge));
-            Assert(customGrass.Reverse[2].X==.87 && customGrass.Reverse[3].X==.6104,"custom lower-right paths are preserved");
+            var customPaths=new Settings{GeometryVersion=4,Normal=Settings.Version4OuterLines(false),Reverse=Settings.Version4OuterLines(true)};
+            customPaths.Normal[0].X-=.01;customPaths.Reverse[2].X+=.01;
+            var customGrass=Settings.FromJson(serializer.Serialize(customPaths));
+            Assert(customGrass.Normal.Take(2).Zip(customPaths.Normal,(a,b)=>Plan.PixelDistance(a,b)<.001).All(match=>match) && customGrass.Reverse.Skip(2).Zip(customPaths.Reverse.Skip(2),(a,b)=>Plan.PixelDistance(a,b)<.001).All(match=>match),"custom arms are preserved completely");
+            Assert(customGrass.Normal.Skip(2).Zip(Settings.OuterLines(false).Skip(2),(a,b)=>Plan.PixelDistance(a,b)<.001).All(match=>match) && customGrass.Reverse.Take(2).Zip(Settings.OuterLines(true),(a,b)=>Plan.PixelDistance(a,b)<.001).All(match=>match),"known preset arms still migrate alongside custom arms");
+            var missingVersion=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(new Settings{Normal=Settings.Version4OuterLines(false),Reverse=Settings.Version4OuterLines(true)}));missingVersion.Remove("GeometryVersion");
+            var missingMigrated=Settings.FromJson(serializer.Serialize(missingVersion));
+            Assert(Plan.PixelDistance(missingMigrated.Normal[0],Settings.OuterLines(false)[0])<.001 && Plan.PixelDistance(missingMigrated.Reverse[3],Settings.OuterLines(true)[3])<.001,"known paths without a version also migrate");
+            // Screenshot-calibrated grass corridors: the former v4 paths fall
+            // outside these bands, including its shoreline and restricted-edge paths.
+            Func<Vec,string,bool> onRim=(point,side)=> {
+                double band=point.X+(side=="upper-left" || side=="lower-right"?.78:-.78)*point.Y;
+                if(side=="upper-left")return band>=.42 && band<=.438;
+                if(side=="upper-right")return band>=.562 && band<=.58;
+                if(side=="lower-left")return band>=-.295 && band<=-.275;
+                return band>=1.297 && band<=1.315;
+            };
+            foreach(string mode in new[]{"LShape","FourSides"})foreach(bool orientation in new[]{false,true})foreach(int count in new[]{1,2,3,9,20,25,30,500})for(int seed=0;seed<20;seed++) {
+                var rimSettings=new Settings{DeploymentMode=mode,Troops=count};var layout=Plan.Troops(rimSettings,orientation,new Random(seed));
+                Assert(layout.Points.Count==count && layout.Counts.Max()-layout.Counts.Min()<=1,"outer rim keeps exact balanced troop counts");
+                for(int i=0;i<layout.Points.Count;i++)Assert(onRim(layout.Points[i],layout.Sides[layout.PointSides[i]].Name),"every placement stays in the outer grass corridor");
+                SupportPlan support=Plan.Support(rimSettings,orientation,new Random(seed));
+                foreach(DeploymentSide side in support.Heroes.Concat(new[]{support.Siege}))Assert(onRim(SupportPlan.Midpoint(side),side.Name),"heroes and siege inherit the corrected grass paths");
+                foreach(DeploymentSide side in layout.Sides)Assert(onRim(side.A,side.Name) && onRim(side.B,side.Name) && Math.Max(side.A.Y,side.B.Y)<=.83,"whole deployment segments stay on the rim above the troop bar");
+            }
             var legacyDepth=Settings.FromJson("{\"OpeningSpellInward\":0.6,\"Battles\":7,\"Spells\":15}");
             Assert(legacyDepth.LShapeOpeningDepthPercent==0 && legacyDepth.LShapeLaterDepthPercent==70 && legacyDepth.FourSidesSpellDepthPercent==0 && legacyDepth.Battles==7 && legacyDepth.Spells==15,"legacy depth defaults preserve run settings");
             foreach(string mode in new[]{"LShape","FourSides"}) foreach(bool orientation in new[]{false,true}) foreach(int depth in new[]{0,10,70,100}) {
@@ -512,7 +552,15 @@ namespace ClashPekkas {
             Assert(Vision.Label("attack","'Baetie") && Vision.Label("attack","BattiE") && !Vision.Label("attack","Battle ends in") && !Vision.Label("attack","Ranked Battle"),"common home-button font confusions accepted without matching battle screen labels");
             Assert(Vision.Label("return","R TURN -") && !Vision.Label("return","Okay"),"observed Google Return OCR with missing e is accepted in the results-only button crop");
             Assert(Vision.Label("find","FiNd a Matcx") && !Vision.Label("find","Join Tournament"),"observed Find a Match OCR error accepted without selecting ranked button");
-            Assert(Vision.Label("find","FiNd a Mate") && Vision.Label("find","Find a Macth") && Vision.Label("find","FiNd a Mate 1500 0"),"80-percent button matching accepts observed missing/misread letters and ignores price");
+            Assert(Vision.Label("find","FiNd a Mate") && Vision.Label("find","Find a Macth") && Vision.Label("find","FiNd a Mate 1500 0"),"60-percent button matching accepts observed missing/misread letters and ignores price");
+            Assert(Vision.Label("find","IFrjNdAMatcH") && Vision.Label("find","Find a Xxxxh") && !Vision.Label("find","findxxxxxh"),"60-percent threshold accepts reported misreading and its exact boundary, rejecting weaker labels");
+            int fee;
+            foreach(string price in new[]{"100","1600","5,000","1 600","1600 0","I600 O"})Assert(Vision.TryFindMatchCost(price,out fee) && fee>=100 && fee<=5000,"supported battle costs accepted");
+            foreach(string price in new[]{"0","99","5001","5,001","16000","100 000","1000 500","FPS 1600","x1600"})Assert(!Vision.TryFindMatchCost(price,out fee),"out-of-range and unrelated numeric text rejected");
+            OcrLine costLine=new OcrLine{Text="1600 0",X=150,Y=65,Width=110,Height=30};
+            Assert(Vision.Locate("find",new[]{costLine},Vision.Region("find"))!=null,"coin value alone in the fee row identifies Find a Match");
+            Assert(Vision.Locate("find",new[]{new OcrLine{Text="100",X=150,Y=5,Width=110,Height=20}},Vision.Region("find"))==null,"numbers outside the fee row do not identify Find a Match");
+            Assert(Vision.Locate("find",new[]{costLine,new OcrLine{Text="500",X=280,Y=65,Width=80,Height=30}},Vision.Region("find"))==null,"ambiguous cost candidates rejected");
             Assert(Vision.TextSimilarity("findamate","findamatch")>=.8 && !Vision.Label("find","Find a Player") && !Vision.Label("find","Edit Army") && !Vision.Label("find","Next"),"fuzzy labels remain bounded to the full expected phrase");
             Assert(Vision.Locate("find",new[]{new OcrLine{Text="FiNd a Mate",X=100,Y=20,Width=150,Height=30}},Vision.Region("find"))!=null,"fuzzy match maps to the known Find a Match button region");
             Assert(Vision.Locate("find",new[]{new OcrLine{Text="Find a",X=100,Y=20,Width=100,Height=25},new OcrLine{Text="Mate",X=110,Y=50,Width=80,Height=25}},Vision.Region("find"))!=null,"split label lines use the same tolerant comparison");

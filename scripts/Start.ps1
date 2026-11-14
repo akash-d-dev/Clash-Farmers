@@ -3,7 +3,7 @@ param([switch]$SelfTest,[int]$ResumeBattles=0,[int]$CompletedBattles=0,[switch]$
 $ErrorActionPreference = 'Stop'
 try {
     Add-Type -AssemblyName System.Windows.Forms, System.Drawing, System.Web.Extensions
-    $sources = @($SourcePath)
+    $sources = @($SourcePaths)
     if ($SelfTest) { $sources += "$ProjectRoot\tests\SelfTest.cs" }
     Add-Type -Path $sources -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
     if ($SelfTest) { [ClashPekkas.Tests]::Run(); exit }

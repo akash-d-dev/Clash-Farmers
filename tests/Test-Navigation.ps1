@@ -1,7 +1,7 @@
 . "$PSScriptRoot\..\scripts\Paths.ps1"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 . "$ProjectRoot\scripts\Ocr.ps1"
 $readerCallback = [ClashPekkas.OcrReader] { param([byte[]]$png) Read-GameText $png }
 $readLog = [System.Action[string]] { param([string]$message) Write-Host $message }
@@ -54,6 +54,34 @@ if(Test-Path -LiteralPath $surrenderFixture) {
     } finally { $dialog.Dispose() }
 }
 $defaults=[ClashPekkas.Settings]::new()
+$costFixture=[Drawing.Bitmap]::new((Join-Path $FixtureDirectory 'google-find-cost.png'))
+try {
+    foreach($evidence in @('both','text','price')) {
+        $sample=$costFixture.Clone()
+        try {
+            if($evidence -ne 'both') {
+                $drawing=[Drawing.Graphics]::FromImage($sample)
+                try {
+                    $mask=if($evidence -eq 'price'){[Drawing.Rectangle]::new(65,585,420,50)}else{[ClashPekkas.Vision]::FindMatchCostRegion}
+                    $drawing.FillRectangle([Drawing.Brushes]::Black,$mask)
+                }finally{$drawing.Dispose()}
+            }
+            $point=$reader.Find($sample,'find')
+            if($null -eq $point -or $point.X -lt .04 -or $point.X -gt .31 -or $point.Y -lt .65 -or $point.Y -gt .825){throw "Supplied Find a Match screenshot failed with $evidence evidence."}
+            "PASS: supplied Find a Match button recognized with $evidence evidence."
+        }finally{$sample.Dispose()}
+    }
+    $script:costOnlyCalls=0
+    $priceReader=[ClashPekkas.ScreenReader]::new([ClashPekkas.OcrReader]{param([byte[]]$png)
+        $stream=[IO.MemoryStream]::new($png);$inputImage=[Drawing.Bitmap]::new($stream)
+        try {
+            if($inputImage.Width -eq 710 -and $inputImage.Height -eq 210){$script:costOnlyCalls++;return '[{"Text":"1600 0","X":120,"Y":40,"Width":180,"Height":35}]'}
+            return '[]'
+        }finally{$inputImage.Dispose();$stream.Dispose()}
+    },$null,$null)
+    if($null -eq $priceReader.Find($costFixture,'find') -or $script:costOnlyCalls -ne 1){throw 'Dedicated coin-row OCR fallback did not identify Find a Match.'}
+    'PASS: independent coin-row crop works when the whole-button OCR is unreadable.'
+}finally{$costFixture.Dispose()}
 $homeCropPath=Join-Path $FixtureDirectory 'google-home-crop.png'
 if(Test-Path -LiteralPath $homeCropPath) {
     $homeCrop=[Drawing.Bitmap]::new($homeCropPath)

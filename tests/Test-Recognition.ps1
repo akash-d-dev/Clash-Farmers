@@ -1,7 +1,7 @@
 . "$PSScriptRoot\..\scripts\Paths.ps1"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms, System.Web.Extensions
-Add-Type -Path $SourcePath -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path $SourcePaths -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 . "$ProjectRoot\scripts\Ocr.ps1"
 $image = [Drawing.Bitmap]::new("$FixtureDirectory\reference-game.png")
 try {
@@ -74,6 +74,7 @@ try {
     $privateOrder=[Reflection.BindingFlags]'Instance,NonPublic'
     $form.GetType().GetMethod('ApplyActionOrder',$privateOrder).Invoke($form,(,[object]$chosenOrder))
     $stop = $form.Controls.Find('stopButton',$true)[0]
+    if($stop.Text -ne 'Stop (F9)'){throw 'Stop button must advertise only the F9 keyboard shortcut.'}
     if ($null -eq $stop -or $stop.Enabled -or $form.IsBusy) { throw 'Stop must be disabled while idle.' }
     $start = $form.Controls.Find('startButton',$true)[0]
     if ($null -eq $start -or -not $start.Enabled) { throw 'Start must be enabled while idle.' }

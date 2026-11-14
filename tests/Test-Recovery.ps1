@@ -1,7 +1,7 @@
 . "$PSScriptRoot\..\scripts\Paths.ps1"
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms,System.Web.Extensions
-Add-Type -Path @($SourcePath,"$PSScriptRoot\SelfTest.cs","$PSScriptRoot\RecoveryTests.cs") -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
+Add-Type -Path (@($SourcePaths)+@("$PSScriptRoot\SelfTest.cs","$PSScriptRoot\RecoveryTests.cs")) -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions,System.Core,UIAutomationClient,UIAutomationTypes,WindowsBase
 [ClashPekkas.RecoveryTests]::Run()
 . "$ProjectRoot\scripts\Ocr.ps1"
 $reader=[ClashPekkas.ScreenReader]::new([ClashPekkas.OcrReader]{param([byte[]]$png) Read-GameText $png},$null,$null,$AssetDirectory)

@@ -8,7 +8,7 @@ $compiler=Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDir
 $null=New-Item -ItemType Directory -Path (Join-Path $ProjectRoot 'bin') -Force
 $arguments=@('/nologo','/noconfig','/reference:System.dll','/target:winexe','/platform:x64',('/out:'+(Join-Path $ProjectRoot 'bin\ClashFarmer.exe')))
 $arguments+=@($refs|Select-Object -Unique|ForEach-Object {'/reference:'+$_})
-$arguments+=@($SourcePath,(Join-Path $ProjectRoot 'src\Program.cs'))
+$arguments+=@($SourcePaths)+@((Join-Path $ProjectRoot 'src\Program.cs'))
 & $compiler @arguments
 if($LASTEXITCODE -ne 0){throw 'Runner compilation failed.'}
 # Preserve existing shortcuts that still launch the old filename.
