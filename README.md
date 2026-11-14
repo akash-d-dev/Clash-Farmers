@@ -33,15 +33,17 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 
 At the start of a run, the app verifies the home village and sends three zoom-out
 gestures before opening Battle. ADB uses a bundled two-finger pinch helper;
-desktop control uses downward mouse-wheel input. Normal subsequent battles reuse
-that zoom. Home/navigation recovery marks zoom for preparation again at the next
+desktop control uses downward mouse-wheel input. After every completed battle,
+the app zooms out again on verified home after the enabled home swipes, or
+immediately when swipes are disabled. This includes the final battle before the
+run finishes. Home/navigation recovery also marks zoom for preparation at the next
 verified home or scouting screen, before selecting any units or calculating
 placement. The app shows **Zooming out** while preparing, then verifies the screen
 again. It never intentionally zooms an active battle, results, or a blocking
 dialog. F9/Stop cancels remaining steps after the current short gesture returns.
 An input failure stops before deployment instead of assuming zoom succeeded.
-The game must retain its camera zoom between attacks; manually changing it during
-a run is not detected. Custom paths and boundary fitting still use their existing
+This resets camera changes caused by nonblocking event focus between attacks;
+manually changing the camera during deployment is not detected. Custom paths and boundary fitting still use their existing
 coordinates. See [the Android helper notes](android/README.md) for its source and
 optional rebuild instructions; users do not need Java installed.
 

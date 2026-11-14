@@ -27,7 +27,7 @@ namespace ClashPekkas {
         static bool HomeNavigation(string state) {return HomeState(state) || state=="Find match" || state=="Army" || state=="Fast verify" || state=="Navigation recovery" || state=="Search return";}
         void CountReturnedBattle() {
             if(!battlePending)return;
-            battlePending=false;Completed++;log("Completed battle "+Completed+"/"+limit+".");
+            battlePending=false;Completed++;zoomPending=true;log("Completed battle "+Completed+"/"+limit+".");
         }
         void RecoveryDiagnostic(NavigationObservation observation,string reason) {
             ((IRecoveryGame)game).SaveRecovery(observation,new RecoveryRecord{Reason=reason,Origin=recoveryOrigin,State=State,Attempt=RecoveryAttempt,Completed=Completed,Total=limit,SkippedBases=SkippedBases,BackInputs=recoveryBacks,BattlePending=battlePending});
@@ -61,6 +61,7 @@ namespace ClashPekkas {
                         next=entered.AddMilliseconds(homeSwipesRemaining>0?random.Next(1000,2001):500);return;
                     }
                 }
+                if(PrepareHomeZoom(now))return;
                 if(Completed>=limit){Stop("Finished "+Completed+" battles. Stopped at home.");return;}
                 ResetLoot();battleDeadline=DateTime.MinValue;OpenFromHome(observation.Home,now);
                 next=next.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
@@ -76,6 +77,8 @@ namespace ClashPekkas {
                 if(observation.Kind=="Results") {log("Recovery found results; resuming return home.");Go(battlePending?"Result":"Search return",observedAt);return;}
                 if(StableHome(observation)) {
                     CountReturnedBattle();battleDeadline=DateTime.MinValue;
+                    scannedNavigation=true;
+                    if(PrepareHomeZoom(observedAt))return;
                     if(Completed>=limit){Stop("Finished "+Completed+" battles. Stopped at home.");return;}
                     log("Home recovered. Skipping remaining home swipes and using scanned navigation.");
                     scannedNavigation=true;ResetLoot();OpenFromHome(observation.Home,observedAt);return;
@@ -177,7 +180,7 @@ namespace ClashPekkas {
             last=point; return stable>=2;
         }
         void OpenFromHome(Vec detected,DateTime now) {
-            if(zoomPending && game is IZoomGame){BeginZoom("Home",now);return;}
+            if(PrepareHomeZoom(now))return;
             game.Click(settings.FastNavigation && !scannedNavigation ? settings.HomeBattleButton : detected);
             Go(settings.FastNavigation && !scannedNavigation ? "Fast find" : "Find match",now);
             next=now.AddMilliseconds(random.Next(900,1301));
@@ -187,9 +190,13 @@ namespace ClashPekkas {
             log("Fast navigation did not reach scouting. Returning to home for a scanned retry.");
             scannedNavigation=true;ResetLoot();Go("Navigation recovery",now);
         }
+        bool PrepareHomeZoom(DateTime now) {
+            if(!zoomPending || !(game is IZoomGame))return false;
+            BeginZoom("Home",now);return true;
+        }
         void BeginZoom(string scene,DateTime now) {
             zoomScene=scene;zoomSteps=0;zoomProgress=now;Go("Zooming out",now);
-            log("Preparing maximum zoom-out before deployment (3 steps). This is repeated only after recovery or a new Start.");
+            log("Preparing maximum zoom-out (3 steps): at Start, after every completed battle's home swipes, and after recovery.");
         }
         void ZoomTick(DateTime now,Stopwatch clock) {
             using(NavigationObservation observation=((IZoomGame)game).ObserveZoomScene()) {
@@ -207,7 +214,9 @@ namespace ClashPekkas {
                     next=observedAt.AddMilliseconds(300);return;
                 }
                 if(zoomSteps==ZoomStepCount) {
-                    zoomPending=false;ResetLoot();log("Zoom-out preparation complete. Rechecking the screen before navigation/deployment.");Go(zoomScene,observedAt);return;
+                    zoomPending=false;ResetLoot();log("Zoom-out preparation complete. Rechecking the screen before navigation/deployment.");
+                    if(zoomScene=="Home" && Completed>=limit){Stop("Finished "+Completed+" battles. Stopped at home.");return;}
+                    Go(zoomScene,observedAt);return;
                 }
                 game.Guard();((IZoomGame)game).ZoomOutStep();zoomSteps++;
                 zoomProgress=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
@@ -399,6 +408,7 @@ namespace ClashPekkas {
                 else if (State=="Return home" && Ready("attack",out point)) {
                     CountReturnedBattle();
                     if(SwipesEnabled){homeSwipesRemaining=random.Next(1,3);Go("Home swipes",now);next=now.AddMilliseconds(random.Next(1000,2001));return;}
+                    else if(PrepareHomeZoom(now))return;
                     else if (Completed>=limit) Stop("Finished "+Completed+" battles. Stopped at home.");
                     else { ResetLoot();battleDeadline=DateTime.MinValue;scannedNavigation=false;OpenFromHome(point,now);return; }
                 }
@@ -406,6 +416,7 @@ namespace ClashPekkas {
                     if(game.Find("attack")==null){next=now.AddMilliseconds(500);return;}
                     SendSwipe("Home",now);homeSwipesRemaining--;
                     if(homeSwipesRemaining==0){
+                        if(PrepareHomeZoom(now))return;
                         if(Completed>=limit)Stop("Finished "+Completed+" battles. Stopped at home.");
                         else {ResetLoot();battleDeadline=DateTime.MinValue;scannedNavigation=false;Go("Home",now);next=now.AddMilliseconds(300);}
                     }else next=now.AddMilliseconds(Math.Ceiling(tickClock.Elapsed.TotalMilliseconds)+random.Next(1000,2001));

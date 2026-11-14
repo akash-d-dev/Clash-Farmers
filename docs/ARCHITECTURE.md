@@ -97,7 +97,8 @@ Clash Farmer/
 `GameContracts.cs` keeps those boundaries explicit. For example, `IRecoveryGame`
 adds Android Back and one-frame observations, while `ISwipeGame` adds swipe input.
 `IZoomGame` adds scene checks and one zoom-out step; `Runner` schedules three
-steps at run start and after recovery. `AdbClient` uploads and verifies the bundled
+steps at run start, after each completed battle's home swipes (also when swipes
+are disabled), and after recovery. `AdbClient` uploads and verifies the bundled
 `assets/android-zoom.dex` helper once per connection, then runs it through Android's
 `app_process`. It injects a genuine two-finger pinch without Windows mouse input,
 root access, an installed APK, or a persistent service. Desktop zoom retains the
