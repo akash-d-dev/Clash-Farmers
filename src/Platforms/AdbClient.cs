@@ -6,12 +6,14 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using System.Windows.Forms;
 
 // ADB discovery, device connection, screenshots, and Android input transport.
 namespace ClashPekkas {
     public sealed class AdbClient {
         readonly string executable,serial;
+        string zoomHelper;
         public string Serial { get { return serial; } }
         public static readonly string Configuration=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"BlueStacks_nxt","bluestacks.conf");
         public AdbClient(string executable,string serial) {
@@ -105,5 +107,23 @@ namespace ClashPekkas {
         }
         public void Key(Keys key) {Text("shell input keyevent "+AndroidKeyCode(key));}
         public void Back(){Text("shell input keyevent 4");}
+        public void ZoomOut(string helperPath,int width,int height) {
+            if(width<600 || height<300 || width>16384 || height>16384)throw new Exception("Invalid Android zoom display size.");
+            if(zoomHelper==null) {
+                if(!File.Exists(helperPath))throw new Exception("The bundled assets/android-zoom.dex helper is missing. Restore it before starting.");
+                string hash;using(var sha=SHA256.Create())using(var stream=File.OpenRead(helperPath))hash=BitConverter.ToString(sha.ComputeHash(stream)).Replace("-","").ToLowerInvariant();
+                string remote="/data/local/tmp/clash-farmer-zoom-"+hash+".dex";
+                string existing=Text("shell if [ -f "+remote+" ]; then sha256sum "+remote+"; fi").Trim();
+                if(!existing.StartsWith(hash+" ",StringComparison.Ordinal)) {
+                    // The shell process reads only our bundled, checksum-verified helper.
+                    Run("-s "+serial+" push \""+helperPath+"\" "+remote,6000);
+                    Text("shell chmod 444 "+remote);
+                    if(!Text("shell sha256sum "+remote).StartsWith(hash+" ",StringComparison.Ordinal))throw new Exception("Android zoom helper checksum did not match.");
+                }
+                zoomHelper=remote;
+            }
+            string result=Text("shell CLASSPATH="+zoomHelper+" app_process / clashfarmer.input.ZoomInput "+width+" "+height,6000);
+            if(result.Trim()!="ZOOM_OUT_SENT")throw new Exception("Android did not confirm the zoom-out gesture. No deployment started.");
+        }
     }
 }

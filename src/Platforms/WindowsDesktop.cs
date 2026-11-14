@@ -140,6 +140,15 @@ namespace ClashPekkas {
             try { System.Threading.Thread.Sleep(35); }
             finally { if(SendInput(1,new[]{up},Marshal.SizeOf(typeof(Input)))!=1) throw new Exception("Mouse release failed. Run stopped."); }
         }
+        public static void ZoomOut(IntPtr window,Rectangle view) {
+            if(StopRequested() || GetForegroundWindow()!=window)throw new Exception("Stop key pressed or the game lost focus.");
+            int x=view.X+view.Width/2,y=view.Y+view.Height/2;
+            if(GetAncestor(WindowFromPoint(new Pt{X=x,Y=y}),2)!=window)throw new Exception("Zoom blocked: another window covers the game.");
+            if(!SetCursorPos(x,y))throw new Exception("Could not position the mouse for zooming.");
+            if(StopRequested() || GetForegroundWindow()!=window)throw new Exception("Stop key pressed or the game lost focus.");
+            var wheel=new Input{Type=0,Data=new InputData{Mouse=new MouseInput{Data=unchecked((uint)-960),Flags=0x0800}}};
+            if(SendInput(1,new[]{wheel},Marshal.SizeOf(typeof(Input)))!=1)throw new Exception("Zoom wheel input failed.");
+        }
         public static void PressKey(IntPtr window,Keys key) {
             if(key!=Keys.D1 && key!=Keys.A && key!=Keys.Z && key!=Keys.Q && key!=Keys.W && key!=Keys.E && key!=Keys.R) throw new Exception("Unsupported selection key.");
             if(StopRequested() || window==IntPtr.Zero || GetForegroundWindow()!=window) throw new Exception("Stop key pressed or the game lost focus.");
@@ -155,7 +164,7 @@ namespace ClashPekkas {
             finally { if(SendInput(1,new[]{up},size)!=1) throw new Exception("Selection key release failed. Run stopped."); }
         }
     }
-    public sealed class DesktopGame : CapturedGame,ISupportGame {
+    public sealed class DesktopGame : CapturedGame,ISupportGame,IZoomGame {
         readonly IntPtr window; readonly Rectangle viewport; readonly Settings settings;
         protected override bool GoogleLayout { get { return settings.GooglePlay; } }
         readonly Rectangle windowBounds;DateTime nextViewCheck;
@@ -187,6 +196,7 @@ namespace ClashPekkas {
             }
         }
         public override void Click(Vec point) { Guard(); Native.Click(window,viewport,point); }
+        public void ZoomOutStep(){Guard();Native.ZoomOut(window,viewport);}
         public bool TrySelectSupport(Keys key) {
             if(!settings.GooglePlay) return false;
             // The user explicitly requests direct shortcut attempts, including

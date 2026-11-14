@@ -27,6 +27,7 @@ namespace ClashPekkas {
     public interface ISupportGame { bool TrySelectSupport(Keys key); }
     public interface ISwipeGame {void Swipe(Vec from,Vec to,int durationMs);}
     public interface IPlacementGame {Settings PlacementSettings(Settings settings);}
+    public interface IZoomGame {NavigationObservation ObserveZoomScene();void ZoomOutStep();}
     public interface IRecoveryGame {
         NavigationObservation ObserveNavigation();
         void Back();

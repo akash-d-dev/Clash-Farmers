@@ -22,6 +22,7 @@ namespace ClashPekkas {
         protected virtual bool GoogleLayout { get { return false; } }
         protected virtual bool DeveloperLayout {get{return false;}}
         public Vec Find(string button) { using(Bitmap image=Capture()) return reader.Find(image,button); }
+        public NavigationObservation ObserveZoomScene(){using(Bitmap image=Capture())return reader.ObserveNavigation(image);}
         public Settings PlacementSettings(Settings settings){using(Bitmap image=Capture())return BattlefieldRim.Adapt(settings,image,placementLog);}
         public LootReading ReadLoot(bool gold=true,bool elixir=true,bool darkElixir=false) { using(Bitmap image=Capture()) return reader.ReadLoot(image,GoogleLayout,gold,elixir,darkElixir,DeveloperLayout); }
         public Vec FirstTroopCard() {using(Bitmap image=Capture()) return reader.FirstTroopCard(image);}

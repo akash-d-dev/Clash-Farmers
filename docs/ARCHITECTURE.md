@@ -62,6 +62,7 @@ Clash Farmer/
     *.ps1                      Offline OCR, placement, UI, settings, and ADB checks
     fixtures/                  Fixed screenshots used by offline checks
   tools/                       Manual inspection, previews, and opt-in live checks
+  android/                     Source and rebuild notes for the ADB pinch helper
   docs/
     ARCHITECTURE.md             This guide
   bin/                         Generated executables; ignored by Git
@@ -95,6 +96,12 @@ Clash Farmer/
 
 `GameContracts.cs` keeps those boundaries explicit. For example, `IRecoveryGame`
 adds Android Back and one-frame observations, while `ISwipeGame` adds swipe input.
+`IZoomGame` adds scene checks and one zoom-out step; `Runner` schedules three
+steps at run start and after recovery. `AdbClient` uploads and verifies the bundled
+`assets/android-zoom.dex` helper once per connection, then runs it through Android's
+`app_process`. It injects a genuine two-finger pinch without Windows mouse input,
+root access, an installed APK, or a persistent service. Desktop zoom retains the
+existing focus and viewport guards and uses the native mouse wheel.
 Offline fake games implement the same interfaces without touching an emulator.
 
 The C# namespace remains **`ClashPekkas`** for compatibility with the existing

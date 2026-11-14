@@ -15,7 +15,14 @@ public static class FakeAdb {
         if(command.Contains("exec-out screencap -p")) {
             byte[] png=File.ReadAllBytes(Path.Combine(root,"frame.png"));
             using(Stream output=Console.OpenStandardOutput()) output.Write(png,0,png.Length);
-        } else if(command.EndsWith("get-state")) Console.WriteLine("device");
+        } else if(args.Length==5 && args[2]=="push") File.Copy(args[3],Path.Combine(root,"helper.dex"),true);
+        else if(command.Contains("sha256sum")) {
+            string file=Path.Combine(root,"helper.dex");
+            if(File.Exists(file))using(var sha=System.Security.Cryptography.SHA256.Create())
+                Console.WriteLine(BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(file))).Replace("-","").ToLowerInvariant()+"  helper.dex");
+        }
+        else if(command.Contains("app_process")) Console.WriteLine("ZOOM_OUT_SENT");
+        else if(command.EndsWith("get-state")) Console.WriteLine("device");
         else if(command=="devices") Console.WriteLine("List of devices attached\r\n127.0.0.1:6520 device product:kiwi_x86_64_dev");
         else if(command.Contains("dumpsys window")) Console.WriteLine("mCurrentFocus=Window{test u0 com.supercell.clashofclans/com.supercell.titan.GameApp}");
     }
@@ -44,6 +51,7 @@ try {
         $game.Click([ClashPekkas.Vec]::new(.5,.5))
         $game.Swipe([ClashPekkas.Vec]::new(.4,.4),[ClashPekkas.Vec]::new(.6,.6),250)
         $game.Back()
+        $game.ZoomOutStep();$game.ZoomOutStep()
         foreach($key in @('D1','A','Z','Q','W','E','R')){$game.PressKey([Windows.Forms.Keys]::$key)}
         if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Z)){throw 'Android siege selection must use ADB.'}
         if(-not $game.TrySelectSupport([Windows.Forms.Keys]::Q)){throw 'Android hero selection must use ADB.'}
@@ -54,9 +62,11 @@ try {
     if($calls -notcontains '-s 127.0.0.1:6520 shell input swipe 640 360 959 539 250'){throw 'Google swipe must scale to the Android screen and use the requested duration.'}
     if($calls -notcontains '-s 127.0.0.1:6520 shell input keyevent 4'){throw 'Recovery Back must be an Android key event, not desktop Escape.'}
     if($calls -match '^connect '){throw 'An online loopback alias must be reused without reconnecting.'}
+    if(@($calls|Where-Object{$_ -match ' push .*android-zoom.dex'}).Count -ne 1){throw 'Zoom helper should be transferred once per connection.'}
+    if(@($calls|Where-Object{$_ -match 'app_process / clashfarmer.input.ZoomInput 1600 900$'}).Count -ne 2){throw 'Zoom must target the Android screenshot size through ADB, not the desktop mouse.'}
     'PASS: Android screenshot bytes decode correctly and taps target the specified local emulator. Uses a fake ADB executable; no game input, network connection, desktop focus, or mouse input was used.'
 } finally {
-    foreach($name in @('FakeAdb.exe','FakeAdb.pdb','frame.png','calls.txt')) { Remove-Item -LiteralPath (Join-Path $testDir $name) -ErrorAction SilentlyContinue }
+    foreach($name in @('FakeAdb.exe','FakeAdb.pdb','frame.png','calls.txt','helper.dex')) { Remove-Item -LiteralPath (Join-Path $testDir $name) -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $testDir -ErrorAction SilentlyContinue
 }
 

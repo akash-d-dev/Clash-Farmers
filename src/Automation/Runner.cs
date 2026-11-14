@@ -19,6 +19,8 @@ namespace ClashPekkas {
         Settings placementSettings;
         bool battleSwipes;DateTime swipeDue;int homeSwipesRemaining;
         bool battlePending,skipHomeSwipes,recoveryCooling,recoverySnapshot,recoveryReloaded;
+        bool zoomPending;int zoomSteps;string zoomScene;DateTime zoomProgress;
+        const int ZoomStepCount=3;
         int recoveryBacks;string recoveryOrigin;
         public int RecoveryAttempt {get;private set;}
         static bool HomeState(string state) {return state=="Home" || state=="Return home" || state=="Search home" || state=="Home swipes";}
@@ -31,6 +33,7 @@ namespace ClashPekkas {
             ((IRecoveryGame)game).SaveRecovery(observation,new RecoveryRecord{Reason=reason,Origin=recoveryOrigin,State=State,Attempt=RecoveryAttempt,Completed=Completed,Total=limit,SkippedBases=SkippedBases,BackInputs=recoveryBacks,BattlePending=battlePending});
         }
         void BeginHomeRecovery(DateTime now) {
+            zoomPending=true;
             recoveryOrigin=State;battleSwipes=false;homeSwipesRemaining=0;skipHomeSwipes=true;
             if(RecoveryAttempt>=3){Stop("Stopped: home recovery failed after three cycles. See data/diagnostics/recovery. Progress: "+Completed+"/"+limit+".");return;}
             RecoveryAttempt++;recoveryBacks=0;recoveryCooling=false;recoverySnapshot=true;recoveryReloaded=false;
@@ -134,10 +137,10 @@ namespace ClashPekkas {
             settings.Validate(); if (limit<1 || limit>30) throw new Exception("Battle limit must be 1-30.");
             this.game=game; this.settings=settings; this.limit=limit; this.deployOnly=deployOnly; this.log=log; this.random=random;
         }
-        public void Start(DateTime now) { Active=true; Completed=0;SkippedBases=0;RecoveryAttempt=0;battlePending=false;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
+        public void Start(DateTime now) { Active=true;zoomPending=true; Completed=0;SkippedBases=0;RecoveryAttempt=0;battlePending=false;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false; Go(deployOnly ? "Scouting" : "Home",now); }
         public void ResumeExistingBattle(DateTime now,int completed,bool searching=false) {
             if(completed<0 || completed>=limit) throw new Exception("Invalid completed battle count for recovery.");
-            Active=true;Completed=completed;SkippedBases=0;RecoveryAttempt=0;battlePending=!searching;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
+            Active=true;zoomPending=true;Completed=completed;SkippedBases=0;RecoveryAttempt=0;battlePending=!searching;skipHomeSwipes=false;battleSwipes=false;homeSwipesRemaining=0;ResetLoot();Message=null;battleDeadline=DateTime.MinValue;scannedNavigation=false;Go(searching?"Recover search":"Recover result",now);
         }
         void ResetLoot() { previousLoot=null;lootFailures=0;lootConfirmations=0; }
         void SkipBase(Vec nextButton,DateTime now,string reason) {
@@ -174,13 +177,42 @@ namespace ClashPekkas {
             last=point; return stable>=2;
         }
         void OpenFromHome(Vec detected,DateTime now) {
+            if(zoomPending && game is IZoomGame){BeginZoom("Home",now);return;}
             game.Click(settings.FastNavigation && !scannedNavigation ? settings.HomeBattleButton : detected);
             Go(settings.FastNavigation && !scannedNavigation ? "Fast find" : "Find match",now);
             next=now.AddMilliseconds(random.Next(900,1301));
         }
         void BeginFallback(DateTime now) {
+            zoomPending=true;
             log("Fast navigation did not reach scouting. Returning to home for a scanned retry.");
             scannedNavigation=true;ResetLoot();Go("Navigation recovery",now);
+        }
+        void BeginZoom(string scene,DateTime now) {
+            zoomScene=scene;zoomSteps=0;zoomProgress=now;Go("Zooming out",now);
+            log("Preparing maximum zoom-out before deployment (3 steps). This is repeated only after recovery or a new Start.");
+        }
+        void ZoomTick(DateTime now,Stopwatch clock) {
+            using(NavigationObservation observation=((IZoomGame)game).ObserveZoomScene()) {
+                DateTime observedAt=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
+                if(observation.Kind!=zoomScene) {
+                    // Never send a pinch to an active battle or a blocking dialog.
+                    if(observation.Kind=="Battle" || observation.Kind=="Battle exit"){Go(observation.Kind=="Battle"?"Result":"Exit battle",observedAt);return;}
+                    if(observation.Kind=="Results"){Go(battlePending?"Result":"Search return",observedAt);return;}
+                    if(observation.Kind=="Home" || observation.Kind=="Scouting"){Go(observation.Kind,observedAt);return;}
+                    if((observedAt-zoomProgress).TotalSeconds>=8) {
+                        if(game is IRecoveryGame)BeginHomeRecovery(observedAt);
+                        else Stop("Stopped: could not verify a clear battlefield for zooming. Close dialogs and start again.");
+                        return;
+                    }
+                    next=observedAt.AddMilliseconds(300);return;
+                }
+                if(zoomSteps==ZoomStepCount) {
+                    zoomPending=false;ResetLoot();log("Zoom-out preparation complete. Rechecking the screen before navigation/deployment.");Go(zoomScene,observedAt);return;
+                }
+                game.Guard();((IZoomGame)game).ZoomOutStep();zoomSteps++;
+                zoomProgress=now.AddMilliseconds(Math.Ceiling(clock.Elapsed.TotalMilliseconds));
+                log("Zoom-out step "+zoomSteps+"/"+ZoomStepCount+" sent.");next=zoomProgress.AddMilliseconds(350);
+            }
         }
         public void Tick(DateTime now) {
             if (!Active) return;
@@ -191,6 +223,7 @@ namespace ClashPekkas {
                     log("Battle duration reached from the first troop placement. Cancelling remaining deployment, abilities and spells.");Go("Ending attack",now);next=now;
                 }
                 if (now<next) return;
+                if(State=="Zooming out"){ZoomTick(now,tickClock);return;}
                 if(!deployOnly && game is IRecoveryGame) {
                     if(HomeNavigation(State) && (now-entered).TotalSeconds>=8)BeginHomeRecovery(now);
                     if(!Active)return;
@@ -234,6 +267,7 @@ namespace ClashPekkas {
                 else if (State=="Army" && Ready("launch",out point)) { game.Click(point); Go("Scouting",now); }
                 else if (State=="Scouting" && Ready("next",out point)) {
                     scannedNavigation=false;RecoveryAttempt=0;skipHomeSwipes=false;
+                    if(zoomPending && game is IZoomGame){BeginZoom("Scouting",now);return;}
                     if(settings.FilterLoot && !AcceptLoot(point,now)) return;
                     Vec troopCard=settings.GooglePlay ? null : game.FirstTroopCard();troopCardPoint=troopCard;
                     if (!settings.GooglePlay && troopCard==null) { Stop("Stopped: first troop card is not available. Load troops in the first slot before starting."); return; }

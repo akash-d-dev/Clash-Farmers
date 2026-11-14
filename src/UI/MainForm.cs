@@ -204,6 +204,7 @@ namespace ClashPekkas {
             UpdateWindowTitle();
         }
         static string TaskbarActivity(string state) {
+            if(state=="Zooming out")return "Zooming out";
             if(state=="Home recovery")return "Recovering home";
             if(state=="Home" || state=="Home swipes") return "On home";
             if(state=="Return home" || state=="Search home" || state=="Search return") return "Returning home";
@@ -233,6 +234,7 @@ namespace ClashPekkas {
             status.Text=preview ? "Preparing a troop-position screenshot. No game clicks will be sent." : (useBackground ? "Starting through the local Android connection in 3 seconds..." : "Opening "+settings.PlayerName+". Starting from your main village in 3 seconds...");
             Write(status.Text);Write("Run: "+(settings.FourSides?"all four sides":"L-shaped")+", "+settings.Troops+" troop clicks, "+(settings.UseSpells?settings.Spells:0)+" spell casts, "+settings.AttackDurationSeconds+"s ±5s from first troop; minimum gold "+settings.MinGold+", elixir "+settings.MinElixir+", dark elixir "+settings.MinDarkElixir+".");
             Write(useBackground ? "Control: local Android connection. Desktop focus and mouse are not used." : "Control: desktop mouse. "+settings.PlayerName+" must remain active.");
+            if(!preview)Write("Zoom-out preparation: three gestures on verified home before the first battle; repeated after recovery, then retained for subsequent attacks.");
             Write(settings.FourSides ? "Spell depth: "+settings.FourSidesSpellDepthPercent+"% from troop lines toward center." : "Spell depths: opening "+settings.LShapeOpeningDepthPercent+"%, later "+settings.LShapeLaterDepthPercent+"% from troop lines toward center.");
             if(settings.GooglePlay) Write("Selection uses the game's default keys: 1 for the first troop, A for the first spell. Load the intended troop and Haste in those first slots.");
             Write("Action order: "+String.Join(" > ",settings.ActionOrder.Select(Settings.ActionLabel))+". Disabled actions are skipped.");
@@ -280,6 +282,7 @@ namespace ClashPekkas {
             if(state=="Find match") return "Looking for Find a Match...";
             if(state=="Army") return "Confirming Attack on the army screen...";
             if(state=="Scouting") return "Waiting for the opponent's base...";
+            if(state=="Zooming out") return "Zooming out before deployment; the next battles keep this zoom...";
             if(state=="Deploying") return "Deploying the configured troop clicks from the first card...";
             if(state=="Select siege" || state=="Deploy siege" || state=="Select hero" || state=="Deploy hero") return "Deploying siege and heroes on the selected sides...";
             if(state=="Select troops") return "Selecting the first troop card...";

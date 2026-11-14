@@ -27,9 +27,23 @@ On first launch, `config/settings.example.json` is copied to `data/settings.json
 
 ## Start
 
-1. Open Clash of Clans on the home village with menus closed and its normal centered camera.
+1. Open Clash of Clans on the home village with menus closed.
 2. Open Start.cmd, select the platform, and set the controls below. A fresh clone can run directly through Windows PowerShell; optionally run Build.ps1 first to create the executable.
 3. Optionally open Action order... to arrange the five actions, then click Start. A three-second countdown precedes connection; ADB mode leaves your desktop focus alone.
+
+At the start of a run, the app verifies the home village and sends three zoom-out
+gestures before opening Battle. ADB uses a bundled two-finger pinch helper;
+desktop control uses downward mouse-wheel input. Normal subsequent battles reuse
+that zoom. Home/navigation recovery marks zoom for preparation again at the next
+verified home or scouting screen, before selecting any units or calculating
+placement. The app shows **Zooming out** while preparing, then verifies the screen
+again. It never intentionally zooms an active battle, results, or a blocking
+dialog. F9/Stop cancels remaining steps after the current short gesture returns.
+An input failure stops before deployment instead of assuming zoom succeeded.
+The game must retain its camera zoom between attacks; manually changing it during
+a run is not detected. Custom paths and boundary fitting still use their existing
+coordinates. See [the Android helper notes](android/README.md) for its source and
+optional rebuild instructions; users do not need Java installed.
 
 | Control | Range / behavior |
 | --- | --- |
@@ -76,7 +90,7 @@ BlueStacks selects the leftmost troop stack using its stack marker and position 
 
 Troops split evenly between the two sides of a randomly selected L, or all four sides according to Deployment. Remainder troops go to distinct randomly chosen sides, so side counts differ by at most one. Each side has evenly spaced slots, with jitter of ±20% of the average spacing. Geometry version 5 follows the outer unbuildable grass rim shown in the supplied full-edge-base screenshot. It moves the upper and lower-right paths clear of the restricted building edge and replaces the old lower-left shoreline offset with a path on the grass. Endpoints avoid the corners and stop above the troop bar. Heroes and siege use the same corrected paths; spell depth remains measured from them. Known older preset sides migrate individually while preserving custom sides and all other preferences. Upper sides deploy first, allowing scouting-only boost buttons to disappear before lower-side placements.
 
-For each accepted opponent, the runner also checks a screenshot for a coherent outer restricted-area outline. A complete centered diamond with long supported edges can adjust the preset paths to that battlefield's position, adding a 20-pixel margin outward in the normalized 1600×900 view. Ambiguous outlines and scenery keep the calibrated version-5 preset. Custom sides remain unchanged. This fit is sampled once per accepted opponent, shared by troops, heroes, siege and spell paths, logged, and applied to placement previews. It changes only the current battle's geometry, not saved coordinates. The default camera and zoom are still required; this is a conservative image-based fit, not a guarantee that every deployment attempt succeeds.
+For each accepted opponent, the runner also checks a screenshot for a coherent outer restricted-area outline. A complete centered diamond with long supported edges can adjust the preset paths to that battlefield's position, adding a 20-pixel margin outward in the normalized 1600×900 view. Ambiguous outlines and scenery keep the calibrated version-5 preset. Custom sides remain unchanged. This fit is sampled once per accepted opponent, shared by troops, heroes, siege and spell paths, logged, and applied to placement previews. It changes only the current battle's geometry, not saved coordinates. Automatic zoom preparation sets the intended scale; manually changing the camera during deployment is not corrected. This is a conservative image-based fit, not a guarantee that every deployment attempt succeeds.
 
 Spells per attack defaults to eleven. In L-shaped mode, counts of 1–6 are all spread across the two selected entry paths and cast immediately at the opening depth, with no later batch. Above six, the rounded-up half is cast immediately; the remaining half follows a 5–10 second pause at 2–5 second intervals. Seven means four opening and three delayed spells; eleven means six opening and five delayed spells. In All four sides mode, all configured spells are divided across the four entry paths and cast quickly, with no delayed group; eleven means 3/3/3/2 in random remainder order. Zero skips spell selection entirely. Opening casts are scheduled 100 ms apart, with a result check after each six casts during longer bursts. Recognition and input overhead add to scheduled intervals.
 

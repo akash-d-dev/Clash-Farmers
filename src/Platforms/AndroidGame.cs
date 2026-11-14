@@ -7,14 +7,16 @@ using System.Windows.Forms;
 
 // Background Android control with connection guards and recovery inputs.
 namespace ClashPekkas {
-    public sealed class AndroidGame : CapturedGame,ISupportGame,ISwipeGame,IRecoveryGame {
+    public sealed class AndroidGame : CapturedGame,ISupportGame,ISwipeGame,IRecoveryGame,IZoomGame {
         readonly bool google;protected override bool GoogleLayout {get{return google;}}
         protected override bool DeveloperLayout {get{return google;}}
         readonly AdbClient client;readonly IntPtr window;Size resolution;DateTime checkedApp;
         readonly string recoveryDirectory;readonly Action<string> report;
+        readonly string zoomHelperPath;
         public AndroidGame(IntPtr window,Settings settings,OcrReader ocr,string referencePath,Action<string> log) : base(ocr,referencePath,log) {
             this.window=window;google=settings.GooglePlay;client=AdbClient.Connect(settings);
             recoveryDirectory=Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(referencePath)),"data","diagnostics","recovery");report=log;
+            zoomHelperPath=Path.Combine(Path.GetDirectoryName(referencePath),"android-zoom.dex");
             if(log!=null) log("Android connected: "+client.Serial+". Desktop focus is not required.");
         }
         public override void Guard() {
@@ -50,6 +52,10 @@ namespace ClashPekkas {
             catch(ExternalException ex){if(report!=null)report("Could not save recovery screenshot: "+ex.Message);}
         }
         public bool TrySelectSupport(Keys key) {if(!google)return false;PressKey(key);return true;}
+        public void ZoomOutStep() {
+            Guard();if(resolution==Size.Empty)throw new Exception("Read the Android screen before zooming.");
+            client.ZoomOut(zoomHelperPath,resolution.Width,resolution.Height);
+        }
         public void Swipe(Vec from,Vec to,int durationMs) {
             Guard();if(resolution==Size.Empty)throw new Exception("Read the Android screen before swiping.");
             foreach(Vec point in new[]{from,to})if(point==null || Double.IsNaN(point.X) || Double.IsNaN(point.Y) || point.X<.25 || point.X>.75 || point.Y<.25 || point.Y>.70)throw new Exception("Swipe must stay in the central battlefield away from buttons.");
